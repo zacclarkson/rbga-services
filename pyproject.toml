@@ -1,0 +1,21 @@
+[project]
+name = "rbga"
+version = "0.1.0"
+description = "RMIT Board Game Association services — key tracker, board-game inventory, anonymous complaints, and a Discord bot."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2.6",
+    "python-dotenv>=1.0",
+    "discord.py>=2.3",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rbga*"]
