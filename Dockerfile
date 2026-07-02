@@ -7,6 +7,10 @@ COPY pyproject.toml ./
 COPY rbga ./rbga
 RUN pip install --no-cache-dir .
 
+# Alembic config + migrations (used on startup and by the deploy step).
+COPY alembic.ini ./
+COPY migrations ./migrations
+
 EXPOSE 8000
 
 # Default = API. compose overrides `command:` for the bot (python -m rbga.bot).

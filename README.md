@@ -71,16 +71,25 @@ compose.yml  Dockerfile  pyproject.toml
 Pushes to `main` auto-deploy via GitHub Actions: the `build` job verifies the
 Dockerfile on a hosted runner, then the `deploy` job runs on a **self-hosted runner
 on the box**, does `git reset --hard origin/main` in `~/servers/rbga`, rebuilds, and
-health-checks `http://localhost:30010/health`. See `.github/workflows/ci-cd.yml` and
-`CLAUDE.md` for the server details (cloudflared ingress, `.env`). The bot container
-is left out of the auto-deploy until a `DISCORD_TOKEN` is configured.
+health-checks `http://localhost:30010/health`. The deploy runs
+`alembic upgrade head` before starting services. See `.github/workflows/ci-cd.yml`
+and `CLAUDE.md` for the server details (cloudflared ingress, `.env`).
+
+## Migrations
+
+Schema is managed by **Alembic** (`migrations/`). The API runs `alembic upgrade
+head` on startup (so local `uvicorn` stays zero-setup), and the deploy runs it too
+before services start. Add a migration with
+`alembic revision -m "..."` (autogenerate against `Base.metadata`), then
+`alembic upgrade head`.
 
 ## Not done yet
 
-- **Alembic migrations.** The API auto-creates tables on startup for dev
-  convenience; production needs real migrations before the schema is trusted.
 - **Complaints front-end.** The endpoint exists; the actual form (likely the
   GitHub Pages landing page POSTing to `/complaints`) is TODO.
+- **BGG auto-fill needs a token.** `/game add` can pull details from a BGG link,
+  but BGG now requires a registered-app Bearer token — set `BGG_API_TOKEN` (see
+  `.env.example`) to enable it.
 - **Auth on the REST writes.** The HTTP endpoints for keys/board-games are still
   open (the *Discord* mutations are role-gated). Fine on a private network; the REST
   side needs a gate before public exposure.

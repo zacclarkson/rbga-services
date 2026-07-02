@@ -21,6 +21,7 @@ class BoardGameIn(BaseModel):
     condition: str | None = None
     bgg_link: str | None = None
     image: str | None = None
+    price: float | None = None
 
 
 class BoardGameOut(BoardGameIn):

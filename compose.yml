@@ -39,5 +39,6 @@ services:
       DISCORD_TOKEN: ${DISCORD_TOKEN}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
       DISCORD_KEYS_ROLE: ${DISCORD_KEYS_ROLE:-}
+      BGG_API_TOKEN: ${BGG_API_TOKEN:-}
       PYTHONUNBUFFERED: "1"  # so the bot's print() output reaches docker logs
     command: python -m rbga.bot

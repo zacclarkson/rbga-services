@@ -5,25 +5,24 @@ routers. The Discord bot is a *separate* process (different runtime shape — a
 long-running gateway connection) but shares the same image and db layer.
 """
 from contextlib import asynccontextmanager
+from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
-from sqlalchemy import text
 
-from ..db.database import COMPLAINTS_SCHEMA, Base, engine
 from .routers import boardgames, complaints, keys
+
+# alembic.ini lives at the repo/image root (two levels up from this file).
+_ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Dev convenience only: auto-create tables on startup. In production this
-    # should be replaced by Alembic migrations (not yet added — see CLAUDE.md).
-    # Complaints live in their own Postgres schema (CLAUDE.md); create_all won't
-    # create the schema itself, so ensure it exists first. None on SQLite dev,
-    # where schemas don't apply.
-    if COMPLAINTS_SCHEMA and engine.dialect.name != "sqlite":
-        with engine.begin() as conn:
-            conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{COMPLAINTS_SCHEMA}"'))
-    Base.metadata.create_all(bind=engine)
+    # Bring the schema up to date on startup (Alembic). Keeps local `uvicorn`
+    # zero-setup and is idempotent, so it's a no-op once already migrated. The
+    # deploy also runs `alembic upgrade head` before services start.
+    command.upgrade(Config(str(_ALEMBIC_INI)), "head")
     yield
 
 

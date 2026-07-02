@@ -48,6 +48,10 @@ jobs:
           AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" fetch --all --prune
           git reset --hard origin/main
+          # Apply DB migrations before starting services, so the schema is ready
+          # before api/bot come up (and a bad migration fails the deploy here).
+          docker compose build api
+          docker compose run --rm api alembic upgrade head
           # DISCORD_TOKEN is configured in .env, so bring up the bot too.
           docker compose up -d --build
       - name: Health check

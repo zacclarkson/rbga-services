@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 from sqlalchemy import func, select
 
+from ..bgg import BGGNotConfigured, extract_bgg_id, fetch_game
 from ..db.database import SessionLocal
 from ..db.models import BoardGame
 from .common import _in_thread, require_exec_role
@@ -140,25 +141,31 @@ async def game_info(interaction: discord.Interaction, game: int):
         embed.add_field(name="Players", value=players)
     if g.publisher:
         embed.add_field(name="Publisher", value=g.publisher)
+    if g.price is not None:
+        embed.add_field(name="Price", value=f"${g.price:.2f}")
     if g.location:
         embed.add_field(name="Location", value=g.location)
     if g.notes:
         embed.add_field(name="Notes", value=g.notes, inline=False)
+    # BGG imports store a real image URL; old CSV rows store a filename we can't render.
+    if g.image and g.image.startswith(("http://", "https://")):
+        embed.set_image(url=g.image)
     embed.set_footer(text=f"id #{g.id}")
     await interaction.followup.send(embed=embed)
 
 
 # --- mutations (exec role only) ---------------------------------------------
 
-@game.command(name="add", description="Add a board game to the inventory")
+@game.command(name="add", description="Add a game — paste a BGG link to auto-fill the details")
 @app_commands.describe(
-    title="The game's title",
-    owner="Who owns it (e.g. RBGA or a member's name)",
+    bgg_link="BoardGameGeek URL — pulls title, publisher, players, and image",
     condition="Physical condition",
-    bgg_link="BoardGameGeek URL",
-    publisher="Publisher",
-    min_players="Minimum players",
-    max_players="Maximum players",
+    price="Purchase value in dollars",
+    title="The game's title (optional if a BGG link is given)",
+    owner="Who owns it (e.g. RBGA or a member's name)",
+    publisher="Publisher (overrides BGG)",
+    min_players="Minimum players (overrides BGG)",
+    max_players="Maximum players (overrides BGG)",
     location="Where it's stored",
     notes="Anything else worth recording",
 )
@@ -166,10 +173,11 @@ async def game_info(interaction: discord.Interaction, game: int):
 @app_commands.check(require_exec_role)
 async def game_add(
     interaction: discord.Interaction,
-    title: str,
-    owner: str | None = None,
-    condition: Condition | None = None,
     bgg_link: str | None = None,
+    condition: Condition | None = None,
+    price: float | None = None,
+    title: str | None = None,
+    owner: str | None = None,
     publisher: str | None = None,
     min_players: int | None = None,
     max_players: int | None = None,
@@ -178,13 +186,56 @@ async def game_add(
 ):
     await interaction.response.defer(ephemeral=True)
 
+    image = None
+    # Pull details from BGG when a link is given; explicit args always win.
+    if bgg_link:
+        bgg_id = extract_bgg_id(bgg_link)
+        if bgg_id is None:
+            await interaction.followup.send(
+                "That doesn't look like a BoardGameGeek link. Paste one like "
+                "`https://boardgamegeek.com/boardgame/13/catan`, or give a title instead.",
+                ephemeral=True,
+            )
+            return
+        try:
+            data = await fetch_game(bgg_id)
+        except BGGNotConfigured:
+            await interaction.followup.send(
+                "BGG lookups aren't set up yet (an admin needs to set `BGG_API_TOKEN`). "
+                "For now, add the game manually with a `title`.",
+                ephemeral=True,
+            )
+            return
+        except Exception:
+            data = None
+        if data is None:
+            await interaction.followup.send(
+                f"Couldn't fetch BGG id {bgg_id} — it may not exist, or BGG is busy. "
+                "Try again, or add the game manually with a title.",
+                ephemeral=True,
+            )
+            return
+        title = title or data.get("title")
+        publisher = publisher or data.get("publisher")
+        min_players = min_players if min_players is not None else data.get("min_players")
+        max_players = max_players if max_players is not None else data.get("max_players")
+        image = data.get("image")
+
+    if not title:
+        await interaction.followup.send(
+            "Give me a title, or a BGG link to pull one from.", ephemeral=True
+        )
+        return
+
     def mutate() -> int:
         with SessionLocal() as db:
             g = BoardGame(
                 title=title,
                 owner=owner,
                 condition=condition,
+                price=price,
                 bgg_link=bgg_link,
+                image=image,
                 publisher=publisher,
                 min_players=min_players,
                 max_players=max_players,

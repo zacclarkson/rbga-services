@@ -7,7 +7,7 @@ de-anonymise a submitter (no IP, no user agent, no session id).
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text
+from sqlalchemy import DateTime, Enum, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import COMPLAINTS_SCHEMA, Base
@@ -42,8 +42,11 @@ class BoardGame(Base):
     owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     condition: Mapped[str | None] = mapped_column(String(64), nullable=True)
     bgg_link: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    # Raw SharePoint attachment filename; not a resolvable URL yet.
+    # Raw SharePoint attachment filename for CSV imports; a real image URL for
+    # BGG imports (see rbga/bgg.py).
     image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Purchase value in dollars (the SharePoint export's "Cost" field).
+    price: Mapped[float | None] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
 
 
 class ComplaintCategory(str, enum.Enum):
