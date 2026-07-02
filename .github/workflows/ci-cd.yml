@@ -1,0 +1,60 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One deploy at a time; cancel superseded in-progress CI runs per ref.
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (verify Dockerfile)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: rbga:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [build]
+    # Only deploy real pushes to main, never PRs.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Pull latest main and redeploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$HOME/servers/rbga"
+          # First run bootstraps the deploy dir into a git checkout. .env and
+          # data/ are gitignored, so reset --hard never touches them.
+          if [ ! -d .git ]; then
+            git init -b main
+            git remote add origin "https://github.com/${{ github.repository }}.git"
+          fi
+          # Authenticate the fetch with the job's ephemeral token (not persisted
+          # to .git/config — passed per-command via -c).
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH" fetch --all --prune
+          git reset --hard origin/main
+          # Only db + api for now: the bot needs DISCORD_TOKEN in .env. Once that's
+          # set, change this to `docker compose up -d --build` to include the bot.
+          docker compose up -d --build db api
+      - name: Health check
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS -o /dev/null http://localhost:30010/health; then echo "healthy"; exit 0; fi
+            sleep 2
+          done
+          echo "health check failed"; docker logs --tail 40 rbga-api; exit 1
