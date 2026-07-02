@@ -24,6 +24,9 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       COMPLAINTS_SCHEMA: ${COMPLAINTS_SCHEMA:-}
       COMPLAINTS_API_TOKEN: ${COMPLAINTS_API_TOKEN}
+      COMPLAINTS_RETENTION_DAYS: ${COMPLAINTS_RETENTION_DAYS:-}
+      RBGA_API_TOKEN: ${RBGA_API_TOKEN:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
     command: uvicorn rbga.api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "30010:8000" # cloudflared ingress -> localhost:30010

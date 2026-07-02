@@ -50,10 +50,33 @@ class BoardGame(Base):
 
 
 class ComplaintCategory(str, enum.Enum):
+    """Who the complaint is *about* (the subject). The handler is derived from
+    this per the escalation ladder in docs/complaints-policy.md — never store the
+    handler here, so the conflict-of-interest rule stays enforceable."""
+
     member = "member"
     committee = "committee"
     exec = "exec"
     president = "president"
+
+
+class ComplaintStatus(str, enum.Enum):
+    """Lifecycle of a complaint: new -> acknowledged -> (escalated) -> closed."""
+
+    new = "new"
+    acknowledged = "acknowledged"
+    escalated = "escalated"
+    closed = "closed"
+
+
+class EscalationTarget(str, enum.Enum):
+    """Who a complaint was escalated to. `rusu` is the external backstop (RMIT
+    University Student Union) — see docs/complaints-policy.md §5-6."""
+
+    committee = "committee"
+    exec = "exec"
+    president = "president"
+    rusu = "rusu"
 
 
 class Complaint(Base):
@@ -70,3 +93,12 @@ class Complaint(Base):
     category: Mapped[ComplaintCategory] = mapped_column(Enum(ComplaintCategory))
     body: Mapped[str] = mapped_column(Text)
     contact: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Lifecycle + escalation tracking. Set by reviewers, not submitters.
+    status: Mapped[ComplaintStatus] = mapped_column(
+        Enum(ComplaintStatus), default=ComplaintStatus.new, server_default="new", nullable=False
+    )
+    escalated_to: Mapped[EscalationTarget | None] = mapped_column(
+        Enum(EscalationTarget), nullable=True
+    )
+    # Set when status becomes 'closed'; the retention purge counts from here.
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

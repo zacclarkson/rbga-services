@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..auth import require_api_token
 from ...db.database import get_session
 from ...db.models import BoardGame
 
@@ -35,7 +36,7 @@ def list_games(db: Session = Depends(get_session)):
     return db.scalars(select(BoardGame).order_by(BoardGame.title)).all()
 
 
-@router.post("", response_model=BoardGameOut, status_code=201)
+@router.post("", response_model=BoardGameOut, status_code=201, dependencies=[Depends(require_api_token)])
 def add_game(data: BoardGameIn, db: Session = Depends(get_session)):
     game = BoardGame(**data.model_dump())
     db.add(game)
@@ -52,7 +53,7 @@ def get_game(game_id: int, db: Session = Depends(get_session)):
     return game
 
 
-@router.delete("/{game_id}", status_code=204)
+@router.delete("/{game_id}", status_code=204, dependencies=[Depends(require_api_token)])
 def delete_game(game_id: int, db: Session = Depends(get_session)):
     game = db.get(BoardGame, game_id)
     if not game:

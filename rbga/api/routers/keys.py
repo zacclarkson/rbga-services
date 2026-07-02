@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..auth import require_api_token
 from ...db.database import get_session
 from ...db.models import Key
 
@@ -36,7 +37,7 @@ def list_keys(db: Session = Depends(get_session)):
     return db.scalars(select(Key)).all()
 
 
-@router.post("", response_model=KeyOut, status_code=201)
+@router.post("", response_model=KeyOut, status_code=201, dependencies=[Depends(require_api_token)])
 def add_key(data: KeyIn, db: Session = Depends(get_session)):
     if db.scalar(select(Key).where(Key.colour == data.colour)):
         raise HTTPException(409, f"A {data.colour} key already exists")
@@ -55,7 +56,7 @@ def who_has(colour: str, db: Session = Depends(get_session)):
     return key
 
 
-@router.post("/{colour}/take", response_model=KeyOut)
+@router.post("/{colour}/take", response_model=KeyOut, dependencies=[Depends(require_api_token)])
 def take_key(colour: str, data: TakeIn, db: Session = Depends(get_session)):
     key = db.scalar(select(Key).where(Key.colour == colour))
     if not key:
@@ -68,7 +69,7 @@ def take_key(colour: str, data: TakeIn, db: Session = Depends(get_session)):
     return key
 
 
-@router.delete("/{colour}", status_code=204)
+@router.delete("/{colour}", status_code=204, dependencies=[Depends(require_api_token)])
 def remove_key(colour: str, db: Session = Depends(get_session)):
     key = db.scalar(select(Key).where(Key.colour == colour))
     if not key:
