@@ -38,6 +38,12 @@ class BoardGame(Base):
     max_players: Mapped[int | None] = mapped_column(Integer, nullable=True)
     location: Mapped[str | None] = mapped_column(String(128), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # From the club's SharePoint export (see rbga/db/import_boardgames.py).
+    owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    condition: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    bgg_link: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Raw SharePoint attachment filename; not a resolvable URL yet.
+    image: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
 class ComplaintCategory(str, enum.Enum):

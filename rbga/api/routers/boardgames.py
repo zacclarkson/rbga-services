@@ -17,6 +17,10 @@ class BoardGameIn(BaseModel):
     max_players: int | None = None
     location: str | None = None
     notes: str | None = None
+    owner: str | None = None
+    condition: str | None = None
+    bgg_link: str | None = None
+    image: str | None = None
 
 
 class BoardGameOut(BoardGameIn):
