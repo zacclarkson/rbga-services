@@ -49,3 +49,34 @@ def test_closing_sets_closed_at_and_reopening_clears_it(client, reviewer_token):
 
     reopened = client.patch(f"/complaints/{cid}", json={"status": "acknowledged"}, headers=headers)
     assert reopened.json()["closed_at"] is None
+
+
+def test_president_submission_is_rejected(client):
+    # No impartial internal handler exists above the president, so the club does
+    # not accept these — the submitter is redirected to RUSU (policy §5).
+    r = client.post("/complaints", json={"category": "president", "body": "about the pres"})
+    assert r.status_code == 400
+    assert "RUSU" in r.json()["detail"]
+
+
+def test_get_single_complaint_requires_reviewer(client, reviewer_token):
+    cid = _submit(client)
+    assert client.get(f"/complaints/{cid}").status_code == 403
+    ok = client.get(f"/complaints/{cid}", headers={"X-Reviewer-Token": reviewer_token})
+    assert ok.status_code == 200
+    assert ok.json()["id"] == cid
+
+
+def test_mark_routed_stamps_routed_at(client, reviewer_token):
+    cid = _submit(client)
+    headers = {"X-Reviewer-Token": reviewer_token}
+    assert client.get(f"/complaints/{cid}", headers=headers).json()["routed_at"] is None
+
+    routed = client.post(f"/complaints/{cid}/routed", headers=headers)
+    assert routed.status_code == 200
+    assert routed.json()["routed_at"] is not None
+
+    # Idempotent: re-marking keeps the original timestamp.
+    first = routed.json()["routed_at"]
+    again = client.post(f"/complaints/{cid}/routed", headers=headers)
+    assert again.json()["routed_at"] == first

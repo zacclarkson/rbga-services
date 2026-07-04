@@ -4,10 +4,11 @@ Shares the db layer with the API (imports models directly rather than calling
 the HTTP API), so a key taken via a slash command and one taken via REST hit the
 same table. This is the Discord front-end Owen's README always intended.
 
-Two features front the non-sensitive tables:
+Features:
   * keys — `/keys`, `/whohas`, `/take`, `/return`, `/addkey`, `/removekey` (here)
   * board games — the `/game` group (rbga/bot/boardgames.py)
-Complaints are deliberately NOT exposed over Discord (privacy design, CLAUDE.md).
+  * complaints — routing + ticket handling (rbga/bot/complaints.py). Handled via
+    the API (reviewer token), never direct DB access; metadata only in Discord.
 
 Reads are open to everyone; mutations are gated to the exec role named by
 `DISCORD_KEYS_ROLE` (see rbga/bot/common.py). If that var is unset we fail closed
@@ -26,7 +27,7 @@ from sqlalchemy import select
 
 from ..db.database import SessionLocal
 from ..db.models import Key
-from . import boardgames
+from . import boardgames, complaints
 from .common import EXEC_ROLE, _in_thread, require_exec_role
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
@@ -210,6 +211,7 @@ async def on_app_command_error(
 
 
 boardgames.setup(tree)  # register the /game command group
+complaints.setup(client)  # register the persistent complaint-action buttons
 
 
 @client.event
@@ -220,6 +222,7 @@ async def on_ready():
         await tree.sync(guild=guild)
     else:
         await tree.sync()
+    complaints.start_polling(client)  # begin routing new complaints to Discord
     print(f"Logged in as {client.user}")
 
 

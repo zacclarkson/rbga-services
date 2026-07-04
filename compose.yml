@@ -46,5 +46,13 @@ services:
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
       DISCORD_KEYS_ROLE: ${DISCORD_KEYS_ROLE:-}
       BGG_API_TOKEN: ${BGG_API_TOKEN:-}
+      # Complaints handling: the bot reaches complaints via the API (reviewer
+      # token), never the DB — so its restricted DB role is unchanged.
+      RBGA_API_BASE_URL: ${RBGA_API_BASE_URL:-http://api:8000}
+      COMPLAINTS_API_TOKEN: ${COMPLAINTS_API_TOKEN:-}
+      COMPLAINTS_COMMITTEE_CHANNEL_ID: ${COMPLAINTS_COMMITTEE_CHANNEL_ID:-}
+      COMPLAINTS_EXEC_CHANNEL_ID: ${COMPLAINTS_EXEC_CHANNEL_ID:-}
+      COMPLAINTS_PRESIDENT_USER_ID: ${COMPLAINTS_PRESIDENT_USER_ID:-}
+      COMPLAINTS_POLL_SECONDS: ${COMPLAINTS_POLL_SECONDS:-60}
       PYTHONUNBUFFERED: "1"  # so the bot's print() output reaches docker logs
     command: python -m rbga.bot

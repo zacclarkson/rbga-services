@@ -1,15 +1,20 @@
 """Anonymous complaints endpoints.
 
-Three access levels on purpose:
-  * POST  /complaints        — PUBLIC. Anyone can submit. We record only what the
+Access levels on purpose:
+  * POST  /complaints          — PUBLIC. Anyone can submit. We record only what the
     form sends; the server adds NOTHING identifying (no IP, no user agent).
-  * GET   /complaints        — RESTRICTED. Requires the reviewer token, so reading
-    the complaint log is deliberately separated from mere server/API access.
-  * PATCH /complaints/{id}    — RESTRICTED (reviewer). Acknowledge / escalate /
-    close a complaint per the ladder in docs/complaints-policy.md.
+    Complaints *about the president* are rejected here and redirected to RUSU
+    (policy §5 — no impartial internal handler exists above the president).
+  * GET   /complaints          — RESTRICTED. Requires the reviewer token.
+  * GET   /complaints/{id}      — RESTRICTED. Single complaint (the Discord handler
+    fetches the body on demand to show it ephemerally).
+  * PATCH /complaints/{id}      — RESTRICTED. Acknowledge / escalate / close per
+    the ladder in docs/complaints-policy.md.
+  * POST  /complaints/{id}/routed — RESTRICTED. Bookkeeping: the Discord handler
+    marks a complaint once it has been posted to its handler tier.
 
-See CLAUDE.md for why the complaints data ideally lives off personal
-infrastructure and in its own DB schema/credentials.
+See CLAUDE.md for why the complaints data lives in its own DB schema/credentials
+and is handled through Discord (metadata only; the body stays here).
 """
 from datetime import datetime
 
@@ -50,6 +55,7 @@ class ComplaintOut(ComplaintAck):
     status: ComplaintStatus
     escalated_to: EscalationTarget | None
     closed_at: datetime | None
+    routed_at: datetime | None
 
 
 class ComplaintUpdate(BaseModel):
@@ -68,6 +74,15 @@ class ComplaintUpdate(BaseModel):
     dependencies=[Depends(complaints_rate_limit)],
 )
 def submit(data: ComplaintIn, db: Session = Depends(get_session)):
+    # A complaint *about the president* has no impartial internal handler, so the
+    # club does not take or store it — the submitter is directed to RUSU (§5).
+    if data.category == ComplaintCategory.president:
+        raise HTTPException(
+            400,
+            "Complaints about the president are handled independently of the club. "
+            "Please contact RUSU Student Rights (https://rusu.rmit.edu.au/studentrights/) "
+            "or RMIT Safer Community.",
+        )
     complaint = Complaint(category=data.category, body=data.body, contact=data.contact)
     db.add(complaint)
     db.commit()
@@ -78,6 +93,36 @@ def submit(data: ComplaintIn, db: Session = Depends(get_session)):
 @router.get("", response_model=list[ComplaintOut], dependencies=[Depends(require_reviewer)])
 def list_complaints(db: Session = Depends(get_session)):
     return db.scalars(select(Complaint).order_by(Complaint.created_at.desc())).all()
+
+
+@router.get(
+    "/{complaint_id}",
+    response_model=ComplaintOut,
+    dependencies=[Depends(require_reviewer)],
+)
+def get_complaint(complaint_id: int, db: Session = Depends(get_session)):
+    complaint = db.get(Complaint, complaint_id)
+    if not complaint:
+        raise HTTPException(404, "No such complaint")
+    return complaint
+
+
+@router.post(
+    "/{complaint_id}/routed",
+    response_model=ComplaintOut,
+    dependencies=[Depends(require_reviewer)],
+)
+def mark_routed(complaint_id: int, db: Session = Depends(get_session)):
+    """Stamp when the Discord handler has posted this complaint to its tier, so
+    the poll loop doesn't post it again. Idempotent — re-marking is a no-op."""
+    complaint = db.get(Complaint, complaint_id)
+    if not complaint:
+        raise HTTPException(404, "No such complaint")
+    if complaint.routed_at is None:
+        complaint.routed_at = datetime.utcnow()
+        db.commit()
+        db.refresh(complaint)
+    return complaint
 
 
 @router.patch(

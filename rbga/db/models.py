@@ -102,3 +102,6 @@ class Complaint(Base):
     )
     # Set when status becomes 'closed'; the retention purge counts from here.
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set once the Discord handler has posted this complaint to its handler tier,
+    # so the bot's poll loop doesn't route it twice.
+    routed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

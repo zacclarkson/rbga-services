@@ -63,10 +63,12 @@ Reading is **closed by default**: if no authorised handler exists, no one can
 read. Those who can read a complaint **must not disclose its contents** outside
 the handling process described here.
 
-**This separation must be enforced by the system.** A single shared credential
-that exposes every complaint to everyone who holds it does *not* satisfy this
-policy — read access must be limited per handler tier, so that (for example) a
-complaint about an exec is readable only by the president.
+**This separation is enforced by routing.** Each complaint is delivered only to
+the private space of its handler tier — currently the club's Discord: a per-tier
+private channel, or a direct message to the president for a complaint about an
+exec — so a handler only ever sees complaints they are responsible for. A single
+shared view that exposes every complaint to everyone does *not* satisfy this
+policy.
 
 ## 5. How complaints are escalated
 
@@ -124,6 +126,12 @@ at, and, where it was escalated, who it was escalated to.
 - Complaint data should be held on **club-owned infrastructure**, not on any
   individual's personal equipment. Where an interim arrangement falls short of
   this, moving to club-owned infrastructure is a priority.
+- **Handling happens in Discord, but the complaint text does not live there.**
+  The Discord notification for a complaint shows only metadata (a reference,
+  which tier it concerns, and its status); the text itself stays in the club's
+  complaints store and is shown to a handler only on request, visible to just
+  that person. This keeps the sensitive content out of general chat history and
+  within the club's retention and deletion controls.
 
 ## 10. Support and other ways to raise a concern
 
