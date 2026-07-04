@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RBGA Board Game Library</title>
+  <meta name="description" content="Browse the RMIT Board Game Association's board-game collection.">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Config: set this to your API's public origin (e.g. https://rbga.duckdns.org).
+       Leave as localhost for local preview. This is the ONLY thing to change. -->
+  <script>window.RBGA_API_BASE = "http://localhost:8000";</script>
+</head>
+<body>
+  <header class="site-header">
+    <h1>RBGA Board Game Library</h1>
+    <p class="tagline">The RMIT Board Game Association's collection — browse what's on the shelf.</p>
+    <div class="controls">
+      <input id="search" type="search" autocomplete="off" placeholder="Search title or publisher…" aria-label="Search by title or publisher">
+      <input id="players" type="number" min="1" inputmode="numeric" placeholder="Plays… players" aria-label="Filter by player count">
+    </div>
+    <p id="count" class="count" aria-live="polite"></p>
+  </header>
+
+  <main>
+    <p id="status" class="status">Loading the library…</p>
+    <div id="gallery" class="gallery"></div>
+  </main>
+
+  <footer class="site-footer">
+    RBGA · live from the club inventory
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
