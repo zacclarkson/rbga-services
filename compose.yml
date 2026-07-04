@@ -50,9 +50,12 @@ services:
       # token), never the DB — so its restricted DB role is unchanged.
       RBGA_API_BASE_URL: ${RBGA_API_BASE_URL:-http://api:8000}
       COMPLAINTS_API_TOKEN: ${COMPLAINTS_API_TOKEN:-}
+      # Routing targets are normally set at runtime via /complaints-setup; these
+      # are an optional fallback.
       COMPLAINTS_COMMITTEE_CHANNEL_ID: ${COMPLAINTS_COMMITTEE_CHANNEL_ID:-}
       COMPLAINTS_EXEC_CHANNEL_ID: ${COMPLAINTS_EXEC_CHANNEL_ID:-}
       COMPLAINTS_PRESIDENT_USER_ID: ${COMPLAINTS_PRESIDENT_USER_ID:-}
+      COMPLAINTS_ADMIN_ROLE: ${COMPLAINTS_ADMIN_ROLE:-}
       COMPLAINTS_POLL_SECONDS: ${COMPLAINTS_POLL_SECONDS:-60}
       PYTHONUNBUFFERED: "1"  # so the bot's print() output reaches docker logs
     command: python -m rbga.bot

@@ -25,13 +25,19 @@ import re
 
 import aiohttp
 import discord
+from discord import app_commands
 
 API_BASE = os.environ.get("RBGA_API_BASE_URL", "").rstrip("/")
 REVIEWER_TOKEN = os.environ.get("COMPLAINTS_API_TOKEN")
-COMMITTEE_CHANNEL_ID = os.environ.get("COMPLAINTS_COMMITTEE_CHANNEL_ID")
-EXEC_CHANNEL_ID = os.environ.get("COMPLAINTS_EXEC_CHANNEL_ID")
-PRESIDENT_USER_ID = os.environ.get("COMPLAINTS_PRESIDENT_USER_ID")
+# Routing targets are normally set at runtime via /complaints-setup (stored in the
+# DB); these env vars are an optional fallback for a scripted deploy.
+ENV_COMMITTEE = os.environ.get("COMPLAINTS_COMMITTEE_CHANNEL_ID")
+ENV_EXEC = os.environ.get("COMPLAINTS_EXEC_CHANNEL_ID")
+ENV_PRESIDENT = os.environ.get("COMPLAINTS_PRESIDENT_USER_ID")
 POLL_SECONDS = int(os.environ.get("COMPLAINTS_POLL_SECONDS", "60"))
+# Who may run /complaints-setup (besides the server owner). Defaults to the exec
+# role that already gates bot mutations.
+ADMIN_ROLE = os.environ.get("COMPLAINTS_ADMIN_ROLE") or os.environ.get("DISCORD_KEYS_ROLE")
 
 RUSU_LINKS = (
     "• RUSU Student Rights — https://rusu.rmit.edu.au/studentrights/\n"
@@ -66,10 +72,23 @@ def next_escalation_target(category: str) -> str:
     return _ESCALATION_TARGET[category]
 
 
+def merge_targets(config: dict, env: dict) -> dict:
+    """Effective routing targets: a saved config value wins, else the env
+    fallback, else None. Keys: 'committee', 'exec', 'president'."""
+    return {k: (config.get(k) or env.get(k)) for k in ("committee", "exec", "president")}
+
+
+def is_authorised(user_id: int, owner_id: int | None, user_role_names: list[str], admin_role: str | None) -> bool:
+    """Who may run /complaints-setup: the guild owner, or a holder of admin_role."""
+    if owner_id is not None and user_id == owner_id:
+        return True
+    return bool(admin_role) and admin_role in user_role_names
+
+
 def _configured() -> bool:
-    return all(
-        [API_BASE, REVIEWER_TOKEN, COMMITTEE_CHANNEL_ID, EXEC_CHANNEL_ID, PRESIDENT_USER_ID]
-    )
+    # Only the API link is required to start; routing targets can arrive later via
+    # the /complaints-setup wizard.
+    return bool(API_BASE and REVIEWER_TOKEN)
 
 
 # --- API client (reviewer token; the bot never touches the complaints DB) ----
@@ -115,6 +134,45 @@ async def _api_mark_routed(cid: int) -> None:
         r.raise_for_status()
 
 
+async def _api_get_config() -> dict:
+    s = await _http()
+    async with s.get(f"{API_BASE}/complaints/config") as r:
+        r.raise_for_status()
+        return await r.json()
+
+
+async def _api_put_config(committee: str | None, exec_: str | None, president: str | None) -> dict:
+    s = await _http()
+    payload = {
+        "committee_channel_id": committee,
+        "exec_channel_id": exec_,
+        "president_user_id": president,
+    }
+    async with s.put(f"{API_BASE}/complaints/config", json=payload) as r:
+        r.raise_for_status()
+        return await r.json()
+
+
+async def resolve_targets() -> dict:
+    """The effective routing targets (saved config over env fallback)."""
+    cfg = await _api_get_config()
+    saved = {
+        "committee": cfg.get("committee_channel_id"),
+        "exec": cfg.get("exec_channel_id"),
+        "president": cfg.get("president_user_id"),
+    }
+    env = {"committee": ENV_COMMITTEE, "exec": ENV_EXEC, "president": ENV_PRESIDENT}
+    return merge_targets(saved, env)
+
+
+def _target_id(kind: str, symbol: str | None, targets: dict) -> str | None:
+    if kind == "channel":
+        return targets.get(symbol)
+    if kind == "dm":
+        return targets.get("president")
+    return None
+
+
 # --- Discord presentation ---------------------------------------------------
 _STATUS_COLOUR = {
     "new": discord.Colour.orange(),
@@ -143,16 +201,23 @@ def _complaint_id(interaction: discord.Interaction) -> int:
     return int(_ID_RE.search(interaction.message.embeds[0].title).group(1))
 
 
-async def _post(client: discord.Client, kind: str, symbol: str | None, c: dict) -> None:
-    """Post a notification (embed + buttons) to a channel or the president's DM."""
+async def _post(client: discord.Client, kind: str, symbol: str | None, c: dict, targets: dict) -> bool:
+    """Post a notification (embed + buttons) to a channel or the president's DM.
+    Returns False (without posting) if that tier's destination isn't configured."""
+    target_id = _target_id(kind, symbol, targets)
+    if not target_id:
+        who = symbol or kind
+        print(f"[complaints] no {who} destination set — run /complaints-setup to route complaint #{c['id']}.")
+        return False
+
     embed, view = _embed(c), ComplaintView()
     if kind == "channel":
-        chan_id = int(COMMITTEE_CHANNEL_ID if symbol == "committee" else EXEC_CHANNEL_ID)
-        channel = client.get_channel(chan_id) or await client.fetch_channel(chan_id)
+        channel = client.get_channel(int(target_id)) or await client.fetch_channel(int(target_id))
         await channel.send(embed=embed, view=view)
     elif kind == "dm":
-        user = await client.fetch_user(int(PRESIDENT_USER_ID))
+        user = await client.fetch_user(int(target_id))
         await user.send(embed=embed, view=view)
+    return True
 
 
 async def _refresh(interaction: discord.Interaction, c: dict) -> None:
@@ -201,8 +266,9 @@ async def _do_escalate(interaction: discord.Interaction) -> None:
             ephemeral=True,
         )
     else:
-        await _post(interaction.client, kind, symbol, c)
-        await interaction.followup.send(f"Escalated complaint #{cid} to the {target}.", ephemeral=True)
+        posted = await _post(interaction.client, kind, symbol, c, await resolve_targets())
+        tail = "" if posted else f" (no {target} destination set yet — run /complaints-setup)"
+        await interaction.followup.send(f"Escalated complaint #{cid} to the {target}.{tail}", ephemeral=True)
 
 
 class ComplaintView(discord.ui.View):
@@ -229,6 +295,121 @@ class ComplaintView(discord.ui.View):
         await _do_status(interaction, "closed")
 
 
+# --- setup wizard (owner / admin only) --------------------------------------
+def _chan_default(cid: str | None) -> list:
+    return (
+        [discord.SelectDefaultValue(id=int(cid), type=discord.SelectDefaultValueType.channel)]
+        if cid
+        else []
+    )
+
+
+def _user_default(uid: str | None) -> list:
+    return (
+        [discord.SelectDefaultValue(id=int(uid), type=discord.SelectDefaultValueType.user)]
+        if uid
+        else []
+    )
+
+
+class _CommitteeSelect(discord.ui.ChannelSelect):
+    def __init__(self, current: str | None) -> None:
+        super().__init__(
+            channel_types=[discord.ChannelType.text],
+            placeholder="Committee channel — member complaints",
+            min_values=1, max_values=1, row=0,
+            default_values=_chan_default(current),
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.view.committee = str(self.values[0].id)
+        await interaction.response.defer()
+
+
+class _ExecSelect(discord.ui.ChannelSelect):
+    def __init__(self, current: str | None) -> None:
+        super().__init__(
+            channel_types=[discord.ChannelType.text],
+            placeholder="Exec channel — committee complaints",
+            min_values=1, max_values=1, row=1,
+            default_values=_chan_default(current),
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.view.exec_ = str(self.values[0].id)
+        await interaction.response.defer()
+
+
+class _PresidentSelect(discord.ui.UserSelect):
+    def __init__(self, current: str | None) -> None:
+        super().__init__(
+            placeholder="President — receives exec complaints by DM",
+            min_values=1, max_values=1, row=2,
+            default_values=_user_default(current),
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.view.president = str(self.values[0].id)
+        await interaction.response.defer()
+
+
+class SetupView(discord.ui.View):
+    """Transient (ephemeral, 5-min) panel to pick the routing targets."""
+
+    def __init__(self, cfg: dict) -> None:
+        super().__init__(timeout=300)
+        self.committee = cfg.get("committee_channel_id")
+        self.exec_ = cfg.get("exec_channel_id")
+        self.president = cfg.get("president_user_id")
+        self.add_item(_CommitteeSelect(self.committee))
+        self.add_item(_ExecSelect(self.exec_))
+        self.add_item(_PresidentSelect(self.president))
+
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.success, row=3)
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await _api_put_config(self.committee, self.exec_, self.president)
+        lines = [
+            f"• Committee → <#{self.committee}>" if self.committee else "• Committee → *(unset)*",
+            f"• Exec → <#{self.exec_}>" if self.exec_ else "• Exec → *(unset)*",
+            f"• President → <@{self.president}>" if self.president else "• President → *(unset)*",
+        ]
+        await interaction.response.edit_message(
+            content="**Saved complaints routing:**\n" + "\n".join(lines), view=None
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=3)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(content="Cancelled — no changes made.", view=None)
+
+
+@app_commands.command(
+    name="complaints-setup", description="Configure where complaints are routed in Discord"
+)
+@app_commands.guild_only()
+async def complaints_setup(interaction: discord.Interaction) -> None:
+    member = interaction.user
+    owner_id = interaction.guild.owner_id if interaction.guild else None
+    role_names = [r.name for r in getattr(member, "roles", [])]
+    if not is_authorised(member.id, owner_id, role_names, ADMIN_ROLE):
+        who = f"the server owner or the **{ADMIN_ROLE}** role" if ADMIN_ROLE else "the server owner"
+        await interaction.response.send_message(
+            f"Only {who} can configure complaints routing.", ephemeral=True
+        )
+        return
+    try:
+        cfg = await _api_get_config()
+    except Exception as e:
+        await interaction.response.send_message(
+            f"Couldn't reach the API to load the current config: {e!r}", ephemeral=True
+        )
+        return
+    await interaction.response.send_message(
+        "**Complaints setup** — choose where each tier's complaints go, then **Save**.",
+        view=SetupView(cfg),
+        ephemeral=True,
+    )
+
+
 # --- poll loop --------------------------------------------------------------
 _polling = False
 
@@ -237,11 +418,15 @@ async def _poll_loop(client: discord.Client) -> None:
     await client.wait_until_ready()
     while not client.is_closed():
         try:
-            for c in await _api_list():
-                if c["status"] == "new" and c.get("routed_at") is None:
+            new = [c for c in await _api_list() if c["status"] == "new" and c.get("routed_at") is None]
+            if new:
+                targets = await resolve_targets()
+                for c in new:
                     kind, symbol = destination_for(c["category"])
-                    await _post(client, kind, symbol, c)
-                    await _api_mark_routed(c["id"])
+                    # Only mark routed once actually posted, so an unconfigured
+                    # tier's complaints get delivered after /complaints-setup.
+                    if await _post(client, kind, symbol, c, targets):
+                        await _api_mark_routed(c["id"])
         except Exception as e:  # never let a transient API/Discord error kill the loop
             print(f"[complaints] poll error: {e!r}")
         await asyncio.sleep(POLL_SECONDS)
@@ -255,14 +440,15 @@ def start_polling(client: discord.Client) -> None:
         return
     if not _configured():
         print(
-            "[complaints] not configured (need RBGA_API_BASE_URL, COMPLAINTS_API_TOKEN, "
-            "and the committee/exec channel + president user ids) — Discord handling disabled."
+            "[complaints] not configured (need RBGA_API_BASE_URL and COMPLAINTS_API_TOKEN) "
+            "— Discord handling disabled. Set routing targets with /complaints-setup."
         )
         return
     _polling = True
     client.loop.create_task(_poll_loop(client))
 
 
-def setup(client: discord.Client) -> None:
-    """Register the persistent view so complaint buttons work across restarts."""
+def setup(client: discord.Client, tree: app_commands.CommandTree) -> None:
+    """Register the persistent complaint buttons and the /complaints-setup wizard."""
     client.add_view(ComplaintView())
+    tree.add_command(complaints_setup)

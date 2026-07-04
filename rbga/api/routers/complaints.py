@@ -26,7 +26,13 @@ from sqlalchemy.orm import Session
 from ..auth import require_reviewer
 from ..ratelimit import complaints_rate_limit
 from ...db.database import get_session
-from ...db.models import Complaint, ComplaintCategory, ComplaintStatus, EscalationTarget
+from ...db.models import (
+    Complaint,
+    ComplaintCategory,
+    ComplaintsConfig,
+    ComplaintStatus,
+    EscalationTarget,
+)
 
 router = APIRouter(prefix="/complaints", tags=["complaints"])
 
@@ -67,6 +73,19 @@ class ComplaintUpdate(BaseModel):
     escalated_to: EscalationTarget | None = None
 
 
+class ComplaintsConfigIn(BaseModel):
+    """Where complaints are routed in Discord — set by the /complaints-setup
+    wizard. All optional; a partial save leaves the others as they were."""
+
+    committee_channel_id: str | None = None
+    exec_channel_id: str | None = None
+    president_user_id: str | None = None
+
+
+class ComplaintsConfigOut(ComplaintsConfigIn):
+    model_config = ConfigDict(from_attributes=True)
+
+
 @router.post(
     "",
     response_model=ComplaintAck,
@@ -93,6 +112,39 @@ def submit(data: ComplaintIn, db: Session = Depends(get_session)):
 @router.get("", response_model=list[ComplaintOut], dependencies=[Depends(require_reviewer)])
 def list_complaints(db: Session = Depends(get_session)):
     return db.scalars(select(Complaint).order_by(Complaint.created_at.desc())).all()
+
+
+# NOTE: /config is declared before /{complaint_id} so it isn't captured as an id.
+def _get_config_row(db: Session) -> ComplaintsConfig:
+    row = db.get(ComplaintsConfig, 1)
+    if row is None:
+        row = ComplaintsConfig(id=1)
+        db.add(row)
+    return row
+
+
+@router.get(
+    "/config",
+    response_model=ComplaintsConfigOut,
+    dependencies=[Depends(require_reviewer)],
+)
+def get_config(db: Session = Depends(get_session)):
+    return _get_config_row(db)
+
+
+@router.put(
+    "/config",
+    response_model=ComplaintsConfigOut,
+    dependencies=[Depends(require_reviewer)],
+)
+def put_config(data: ComplaintsConfigIn, db: Session = Depends(get_session)):
+    row = _get_config_row(db)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(row, field, value)
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.get(

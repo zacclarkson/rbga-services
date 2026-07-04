@@ -105,3 +105,17 @@ class Complaint(Base):
     # Set once the Discord handler has posted this complaint to its handler tier,
     # so the bot's poll loop doesn't route it twice.
     routed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ComplaintsConfig(Base):
+    """Single-row (id=1) runtime config for where complaints are routed in
+    Discord, set by the /complaints-setup wizard. Not sensitive (just channel/user
+    ids), so it lives in the default schema — the bot reaches it via the API."""
+
+    __tablename__ = "complaints_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
+    committee_channel_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    exec_channel_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    president_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

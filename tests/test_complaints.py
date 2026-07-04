@@ -80,3 +80,36 @@ def test_mark_routed_stamps_routed_at(client, reviewer_token):
     first = routed.json()["routed_at"]
     again = client.post(f"/complaints/{cid}/routed", headers=headers)
     assert again.json()["routed_at"] == first
+
+
+def test_config_requires_reviewer(client, reviewer_token):
+    assert client.get("/complaints/config").status_code == 403
+    assert client.put("/complaints/config", json={}).status_code == 403
+
+
+def test_config_defaults_empty_then_saves(client, reviewer_token):
+    headers = {"X-Reviewer-Token": reviewer_token}
+
+    default = client.get("/complaints/config", headers=headers)
+    assert default.status_code == 200
+    assert default.json()["committee_channel_id"] is None
+
+    saved = client.put(
+        "/complaints/config",
+        json={"committee_channel_id": "111", "president_user_id": "222"},
+        headers=headers,
+    )
+    assert saved.status_code == 200
+    assert saved.json()["committee_channel_id"] == "111"
+    assert saved.json()["president_user_id"] == "222"
+
+    # Partial update leaves the untouched field as it was.
+    updated = client.put(
+        "/complaints/config", json={"exec_channel_id": "333"}, headers=headers
+    )
+    body = updated.json()
+    assert body == {
+        "committee_channel_id": "111",
+        "exec_channel_id": "333",
+        "president_user_id": "222",
+    }

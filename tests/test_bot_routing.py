@@ -44,3 +44,31 @@ def test_president_is_not_routable():
 
 def test_complaint_id_regex_reads_the_embed_title():
     assert c._ID_RE.search("Complaint #42").group(1) == "42"
+
+
+# --- setup wizard access + config resolution --------------------------------
+def test_is_authorised_owner():
+    assert c.is_authorised(user_id=7, owner_id=7, user_role_names=[], admin_role="Exec")
+
+
+def test_is_authorised_admin_role():
+    assert c.is_authorised(user_id=1, owner_id=7, user_role_names=["Exec"], admin_role="Exec")
+
+
+def test_is_authorised_denies_other():
+    assert not c.is_authorised(user_id=1, owner_id=7, user_role_names=["Member"], admin_role="Exec")
+
+
+def test_is_authorised_denies_in_dm():
+    # No guild -> owner_id is None; a non-owner without the role is denied.
+    assert not c.is_authorised(user_id=1, owner_id=None, user_role_names=[], admin_role="Exec")
+
+
+def test_merge_targets_saved_wins_then_env_then_none():
+    config = {"committee": "100", "exec": None, "president": None}
+    env = {"committee": "999", "exec": "200", "president": None}
+    assert c.merge_targets(config, env) == {
+        "committee": "100",  # saved wins
+        "exec": "200",  # falls back to env
+        "president": None,  # neither set
+    }
