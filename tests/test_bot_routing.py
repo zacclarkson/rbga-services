@@ -42,6 +42,15 @@ def test_president_is_not_routable():
         c.destination_for("president")
 
 
+@pytest.mark.parametrize(
+    "category,ok",
+    [("member", True), ("committee", True), ("exec", True), ("president", False)],
+)
+def test_is_submittable(category, ok):
+    # /complain sends president-about complaints to RUSU instead of submitting.
+    assert c.is_submittable(category) is ok
+
+
 def test_complaint_id_regex_reads_the_embed_title():
     assert c._ID_RE.search("Complaint #42").group(1) == "42"
 

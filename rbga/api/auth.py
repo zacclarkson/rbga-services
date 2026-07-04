@@ -30,3 +30,9 @@ def require_reviewer(x_reviewer_token: str | None = Header(default=None)):
     # Fail closed: no token configured -> nobody can read/manage complaints.
     if not _REVIEWER_TOKEN or x_reviewer_token != _REVIEWER_TOKEN:
         raise HTTPException(403, "Not authorised to read complaints")
+
+
+def is_reviewer(token: str | None) -> bool:
+    """True if `token` is the configured reviewer token. Non-raising (unlike
+    require_reviewer) — used to exempt the trusted bot from the public throttle."""
+    return bool(_REVIEWER_TOKEN) and token == _REVIEWER_TOKEN
