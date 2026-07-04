@@ -59,3 +59,26 @@ services:
       COMPLAINTS_POLL_SECONDS: ${COMPLAINTS_POLL_SECONDS:-60}
       PYTHONUNBUFFERED: "1"  # so the bot's print() output reaches docker logs
     command: python -m rbga.bot
+
+  # Optional reverse proxy with automatic HTTPS (Let's Encrypt), for hosting the
+  # API on a box with a public IP + a domain — e.g. the Oracle move with a free
+  # DuckDNS subdomain. NOT started by default (the home box uses cloudflared on
+  # :30010 instead); opt in with `docker compose --profile caddy up -d`.
+  # Needs CADDY_DOMAIN set to a name that resolves to this host, and ports 80/443
+  # open (OCI security list + the instance firewall).
+  caddy:
+    image: caddy:2
+    container_name: rbga-caddy
+    restart: unless-stopped
+    profiles: ["caddy"]
+    depends_on:
+      - api
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data      # issued certs — persist so they survive restarts
+      - ./data/caddy-config:/config

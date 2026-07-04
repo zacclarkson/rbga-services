@@ -1,0 +1,15 @@
+# Caddy config for the optional `caddy` compose service (see compose.yml).
+#
+# Fronts the API with automatic HTTPS: Caddy obtains and auto-renews a Let's
+# Encrypt certificate for CADDY_DOMAIN and reverse-proxies to the api container.
+#
+# CADDY_DOMAIN must be a real name that resolves to this host (e.g. a free
+# rbga.duckdns.org pointed at the Oracle public IP), and ports 80/443 must be
+# reachable, or the certificate can't be issued.
+#
+# To let a browser front-end (e.g. a GitHub Pages site) call this API, also set
+# CORS_ALLOW_ORIGINS on the api service to that site's origin.
+
+{$CADDY_DOMAIN} {
+	reverse_proxy api:8000
+}
