@@ -22,16 +22,22 @@ A complaint consists only of:
 - the **date and time** it was received.
 
 The club records nothing that identifies the person raising a complaint — no
-network address, no device information, no account or login identity. Complaints
-are anonymous by design.
+network address, no device information, no account or login identity — and the
+people who handle a complaint never see who submitted it.
 
 ## 3. What we promise people who raise a complaint
 
 Anyone invited to raise a complaint must be told, in plain language:
 
-- Complaints are **anonymous** — the club does not record who they are.
-- Leaving **contact details is optional**, and is the only way they can identify
-  themselves. They should leave it blank to stay anonymous, and fill it in only
+- Complaints are **anonymous** — the club does not record who they are, and the
+  people handling a complaint never see who submitted it.
+- **How to submit** — complaints can be raised through **Discord** (the
+  `/complain` command) and, in future, an **anonymous web form**. Either way the
+  club stores nothing identifying. Note that submitting through Discord uses your
+  Discord account, so it is *not quite as absolute* as the anonymous web form —
+  your account processes the request, even though the club never records it.
+- Leaving **contact details is optional**, and is the only thing that could
+  identify them. They should leave it blank to stay anonymous, and fill it in only
   if they want a reply.
 - **Where their complaint goes** — the escalation ladder in §5. A complaint about
   the **president** is handled outside the club: the person is directed to RUSU

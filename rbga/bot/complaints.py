@@ -72,6 +72,12 @@ def next_escalation_target(category: str) -> str:
     return _ESCALATION_TARGET[category]
 
 
+def is_submittable(category: str) -> bool:
+    """False for 'president' — those are directed to RUSU, not taken into the
+    club's system (policy §5)."""
+    return category in ("member", "committee", "exec")
+
+
 def merge_targets(config: dict, env: dict) -> dict:
     """Effective routing targets: a saved config value wins, else the env
     fallback, else None. Keys: 'committee', 'exec', 'president'."""
@@ -151,6 +157,16 @@ async def _api_put_config(committee: str | None, exec_: str | None, president: s
     async with s.put(f"{API_BASE}/complaints/config", json=payload) as r:
         r.raise_for_status()
         return await r.json()
+
+
+async def _api_submit(category: str, body: str, contact: str | None) -> None:
+    """Create a complaint on behalf of a Discord submitter. Sends ONLY the
+    content — never the submitter's identity. The reviewer token (already on the
+    session) exempts this from the public rate limit."""
+    s = await _http()
+    payload = {"category": category, "body": body, "contact": contact}
+    async with s.post(f"{API_BASE}/complaints", json=payload) as r:
+        r.raise_for_status()
 
 
 async def resolve_targets() -> dict:
@@ -410,6 +426,69 @@ async def complaints_setup(interaction: discord.Interaction) -> None:
     )
 
 
+# --- submission (/complain) -------------------------------------------------
+class ComplaintModal(discord.ui.Modal, title="Raise a complaint"):
+    body = discord.ui.TextInput(
+        label="What happened?",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=4000,  # Discord's modal cap (server allows 5000)
+        placeholder="Describe your concern. Don't include your name unless you want to be identified.",
+    )
+    contact = discord.ui.TextInput(
+        label="Contact (optional)",
+        style=discord.TextStyle.short,
+        required=False,
+        max_length=256,
+        placeholder="Only if you want a reply — leaving this can de-anonymise you.",
+    )
+
+    def __init__(self, category: str) -> None:
+        super().__init__()
+        self.category = category
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        # Forward ONLY the content — never interaction.user.
+        await _api_submit(self.category, self.body.value, self.contact.value or None)
+        await interaction.response.send_message(
+            "Thanks — your complaint was submitted **anonymously**. The people handling it "
+            "won't see who you are.",
+            ephemeral=True,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        msg = "Sorry — something went wrong submitting that. Please try again."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        print(f"[complaints] submit error: {error!r}")  # no submitter identity logged
+
+
+@app_commands.command(
+    name="complain", description="Raise a complaint — anonymous; handlers won't see who you are"
+)
+@app_commands.guild_only()
+@app_commands.describe(about="Who the complaint is about")
+@app_commands.choices(
+    about=[
+        app_commands.Choice(name="A member", value="member"),
+        app_commands.Choice(name="The committee", value="committee"),
+        app_commands.Choice(name="An exec", value="exec"),
+        app_commands.Choice(name="The president", value="president"),
+    ]
+)
+async def complain(interaction: discord.Interaction, about: app_commands.Choice[str]) -> None:
+    if not is_submittable(about.value):
+        await interaction.response.send_message(
+            "Complaints about the president are handled **independently of the club**, "
+            f"so please contact one of these directly:\n{RUSU_LINKS}",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.send_modal(ComplaintModal(about.value))
+
+
 # --- poll loop --------------------------------------------------------------
 _polling = False
 
@@ -449,6 +528,7 @@ def start_polling(client: discord.Client) -> None:
 
 
 def setup(client: discord.Client, tree: app_commands.CommandTree) -> None:
-    """Register the persistent complaint buttons and the /complaints-setup wizard."""
+    """Register the persistent complaint buttons, /complaints-setup and /complain."""
     client.add_view(ComplaintView())
     tree.add_command(complaints_setup)
+    tree.add_command(complain)

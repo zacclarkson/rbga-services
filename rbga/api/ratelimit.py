@@ -16,7 +16,9 @@ import os
 import secrets
 import time
 
-from fastapi import HTTPException, Request
+from fastapi import Header, HTTPException, Request
+
+from . import auth
 
 # Per-process salt — makes the stored hashes non-reversible and unlinkable across
 # restarts. Never logged, never persisted.
@@ -55,8 +57,8 @@ def _reset() -> None:
     _hits.clear()
 
 
-def complaints_rate_limit(request: Request) -> None:
-    """FastAPI dependency: raise 429 when a client exceeds the window's quota."""
+def _enforce(request: Request) -> None:
+    """Fixed-window count; raise 429 over quota."""
     now = time.time()
     key = _key(request)
 
@@ -75,3 +77,14 @@ def complaints_rate_limit(request: Request) -> None:
 
     if count > _LIMIT:
         raise HTTPException(429, "Too many submissions, please try again later.")
+
+
+def complaints_rate_limit(
+    request: Request, x_reviewer_token: str | None = Header(default=None)
+) -> None:
+    """FastAPI dependency for POST /complaints. Trusted callers holding the
+    reviewer token (the bot forwarding Discord submissions) are exempt — the
+    public throttle is only for anonymous/web submissions."""
+    if auth.is_reviewer(x_reviewer_token):
+        return
+    _enforce(request)

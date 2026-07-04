@@ -23,3 +23,17 @@ def test_oversized_body_rejected(client):
 def test_empty_body_rejected(client):
     r = client.post("/complaints", json={"category": "member", "body": ""})
     assert r.status_code == 422
+
+
+def test_reviewer_token_bypasses_rate_limit(client, reviewer_token, monkeypatch):
+    # The bot forwards Discord submissions with the reviewer token — not throttled.
+    monkeypatch.setattr(ratelimit, "_LIMIT", 2)
+    monkeypatch.setattr(ratelimit, "_WINDOW", 60.0)
+    ratelimit._reset()
+
+    headers = {"X-Reviewer-Token": reviewer_token}
+    codes = [client.post("/complaints", json=_BODY, headers=headers).status_code for _ in range(5)]
+    assert codes == [201] * 5  # well over the limit, all accepted
+
+    # Body caps still apply even for the trusted caller.
+    assert client.post("/complaints", json={"category": "member", "body": ""}, headers=headers).status_code == 422
