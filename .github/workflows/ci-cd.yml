@@ -29,7 +29,8 @@ jobs:
     needs: [build]
     # Only deploy real pushes to main, never PRs.
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: [self-hosted, linux]
+    # The `oracle` label pins this to the production runner on the Oracle VM.
+    runs-on: [self-hosted, oracle]
     steps:
       - name: Pull latest main and redeploy
         env:
@@ -52,8 +53,9 @@ jobs:
           # before api/bot come up (and a bad migration fails the deploy here).
           docker compose build api
           docker compose run --rm api alembic upgrade head
-          # DISCORD_TOKEN is configured in .env, so bring up the bot too.
-          docker compose up -d --build
+          # The caddy profile is on in production (public HTTPS); the bot's
+          # DISCORD_TOKEN is configured in .env, so this brings up everything.
+          docker compose --profile caddy up -d --build
       - name: Health check
         run: |
           for i in $(seq 1 20); do

@@ -1,6 +1,9 @@
 # Local-only Claude Code guidance (contains private server details).
 CLAUDE.md
 
+# Local-only secrets/credentials handover doc for the IT officer.
+HANDOVER-SECRETS.md
+
 __pycache__/
 *.py[cod]
 .venv/
