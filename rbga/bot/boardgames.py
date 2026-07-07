@@ -5,7 +5,7 @@ boardgames.py), via the shared db layer. List/gallery/info/export are open to
 everyone; add/edit/remove are gated to the exec role (see rbga/bot/common.py).
 
 Titles aren't unique (e.g. Polyhedral Dice Set ×4), so info/edit/remove take a
-numeric id, disambiguated for the user by autocomplete that shows "Title (owner)".
+numeric id, disambiguated for the user by autocomplete that shows "#id Title".
 """
 import csv
 import io
@@ -70,20 +70,20 @@ def parse_tags(raw: str | None) -> list[str] | None:
 async def game_autocomplete(
     interaction: discord.Interaction, current: str
 ) -> list[app_commands.Choice[int]]:
-    """Suggest games by title, resolving to their id (disambiguates duplicates)."""
-    def query() -> list[tuple[int, str, str | None]]:
+    """Suggest games by title, resolving to their id. The label leads with the
+    id so duplicate copies of the same title are distinguishable."""
+    def query() -> list[tuple[int, str]]:
         with SessionLocal() as db:
-            stmt = select(BoardGame.id, BoardGame.title, BoardGame.owner)
+            stmt = select(BoardGame.id, BoardGame.title)
             if current:
                 stmt = stmt.where(BoardGame.title.ilike(f"%{current}%"))
             return list(db.execute(stmt.order_by(BoardGame.title).limit(25)).all())
 
     rows = await _in_thread(query)
-    choices = []
-    for gid, title, owner in rows:
-        label = f"{title} ({owner})" if owner else title
-        choices.append(app_commands.Choice(name=label[:100], value=gid))
-    return choices
+    return [
+        app_commands.Choice(name=f"#{gid} {title}"[:100], value=gid)
+        for gid, title in rows
+    ]
 
 
 async def owner_autocomplete(
