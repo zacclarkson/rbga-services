@@ -620,11 +620,19 @@ def start_polling(client: discord.Client) -> None:
     client.loop.create_task(_poll_loop(client))
 
 
-def setup(client: discord.Client, tree: app_commands.CommandTree) -> None:
-    """Register the persistent complaint buttons, /complaints-setup and /complain."""
+def register_persistent(client: discord.Client) -> None:
+    """Register the complaint buttons for dispatch. MUST be called with the
+    event loop running (Client.setup_hook), never at import time: a View
+    constructed without a running loop is left undispatchable by discord.py,
+    which then silently drops every click on it (no error, no log)."""
     # New-style buttons: rebuilt from the custom_id on every click.
     client.add_dynamic_items(ComplaintAction)
     # Legacy buttons on messages posted before the id lived in the custom_id.
     client.add_view(ComplaintView())
+
+
+def setup(client: discord.Client, tree: app_commands.CommandTree) -> None:
+    """Register /complaints-setup and /complain. Button registration lives in
+    register_persistent(), which the client's setup_hook must call."""
     tree.add_command(complaints_setup)
     tree.add_command(complain)

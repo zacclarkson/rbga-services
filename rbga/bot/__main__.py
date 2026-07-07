@@ -34,7 +34,18 @@ TOKEN = os.environ.get("DISCORD_TOKEN")
 GUILD_ID = os.environ.get("DISCORD_GUILD_ID")  # set for instant command sync in one guild
 
 intents = discord.Intents.default()
-client = discord.Client(intents=intents)
+
+
+class RBGAClient(discord.Client):
+    async def setup_hook(self) -> None:
+        # Persistent views must be registered while the event loop is running.
+        # Registering at import time leaves them silently undispatchable
+        # (discord.py drops the clicks with no error), which is exactly a
+        # "buttons on old messages die after every restart" bug.
+        complaints.register_persistent(self)
+
+
+client = RBGAClient(intents=intents)
 tree = app_commands.CommandTree(client)
 
 

@@ -1,4 +1,9 @@
-"""Pure routing logic for the Discord complaints handler (no Discord needed)."""
+"""Pure routing logic for the Discord complaints handler (no Discord needed),
+plus a real-library dispatch regression test at the bottom."""
+import asyncio
+from unittest.mock import MagicMock
+
+import discord
 import pytest
 
 from rbga.bot import complaints as c
@@ -85,6 +90,42 @@ def test_complaint_view_builder_embeds_the_id():
         "complaint:escalate:7",
         "complaint:close:7",
     ]
+
+
+def _fake_button_interaction(embed_title: str) -> MagicMock:
+    inter = MagicMock(spec=discord.Interaction)
+    msg = MagicMock()
+    msg.id = 999888777  # a message id no view instance is stored for
+    embed = MagicMock()
+    embed.title = embed_title
+    msg.embeds = [embed]
+    inter.message = msg
+    inter.data = {"custom_id": "complaint:view", "component_type": 2}
+    return inter
+
+
+def test_registered_legacy_view_actually_dispatches(monkeypatch):
+    """Regression: a View constructed with NO running event loop is silently
+    undispatchable (discord.py's _dispatch_item drops the click without any
+    error or log). register_persistent() must therefore run inside the loop
+    (setup_hook). This drives discord.py's real dispatch path to prove a
+    restart-surviving click on a legacy message reaches the handler."""
+    calls = []
+
+    async def fake_do_view(interaction, cid):
+        calls.append(cid)
+
+    monkeypatch.setattr(c, "_do_view", fake_do_view)
+
+    async def scenario():
+        client = discord.Client(intents=discord.Intents.default())
+        c.register_persistent(client)  # in-loop, as setup_hook does
+        store = client._connection._view_store
+        store.dispatch_view(2, "complaint:view", _fake_button_interaction("Complaint #1"))
+        await asyncio.sleep(0.05)  # let the dispatch task run
+
+    asyncio.run(scenario())
+    assert calls == [1]
 
 
 # --- setup wizard access + config resolution --------------------------------
