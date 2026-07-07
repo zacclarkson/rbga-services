@@ -303,3 +303,34 @@ def test_owner_contact_not_in_public_api(client, write_token):
     payload = client.get("/board-games").json()
     assert "contact" not in payload[0]
     assert "quan@rmit.edu.au" not in str(payload)
+
+
+# --- add/edit forms --------------------------------------------------------------
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("$45", 45.0), ("45.50", 45.5), (" 12 ", 12.0), ("", None), (None, None)],
+)
+def test_parse_money(raw, expected):
+    assert bot_bg.parse_money(raw) == expected
+
+
+def test_parse_money_rejects_junk():
+    with pytest.raises(ValueError, match="isn't a price"):
+        bot_bg.parse_money("cheap")
+
+
+def test_edit_modal_prefills_current_values():
+    g = _game(id=7, title="Catan", owner="RBGA", condition="Fair", price=45.0)
+    modal = bot_bg.EditGameModal(g)
+    assert modal.title == "Edit #7 Catan"
+    assert modal.gid == 7
+    assert modal.game_title.default == "Catan"
+    assert modal.owner.default == "RBGA"
+    assert modal.condition.default == "Fair"
+    assert modal.price.default == "45"
+    assert modal.sell_price.default == ""  # unset stays blank
+
+
+def test_edit_modal_title_truncated_to_discord_cap():
+    g = _game(id=148, title="Arkham Horror: The Card Game and a very long name")
+    assert len(bot_bg.EditGameModal(g).title) <= 45

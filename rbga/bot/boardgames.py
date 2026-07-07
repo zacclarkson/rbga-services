@@ -432,7 +432,209 @@ async def game_info(interaction: discord.Interaction, game: int):
 
 # --- mutations (exec role only) ---------------------------------------------
 
-@game.command(name="add", description="Add a game (paste a BGG link to auto-fill the details)")
+def parse_money(raw: str | None) -> float | None:
+    """'$45' / '45.50' -> float; blank/None -> None. Raises ValueError on junk."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw.strip().lstrip("$"))
+    except ValueError:
+        raise ValueError(f"'{raw.strip()}' isn't a price.")
+
+
+async def _bgg_autofill(bgg_link: str) -> tuple[dict | None, str | None]:
+    """Fetch the BGG record for a link. Returns (data, None) or (None, error
+    message to show the user)."""
+    bgg_id = extract_bgg_id(bgg_link)
+    if bgg_id is None:
+        return None, (
+            "That doesn't look like a BoardGameGeek link. Paste one like "
+            "`https://boardgamegeek.com/boardgame/13/catan`, or give a title instead."
+        )
+    try:
+        data = await fetch_game(bgg_id)
+    except BGGNotConfigured:
+        return None, (
+            "BGG lookups aren't set up yet (an admin needs to set `BGG_API_TOKEN`). "
+            "For now, add the game manually with a `title`."
+        )
+    except Exception:
+        data = None
+    if data is None:
+        return None, (
+            f"Couldn't fetch BGG id {bgg_id}. It may not exist, or BGG is busy. "
+            "Try again, or add the game manually with a title."
+        )
+    return data, None
+
+
+def _insert_game(**fields) -> int:
+    """Create a BoardGame row (runs in a thread); returns the new id."""
+    with SessionLocal() as db:
+        g = BoardGame(**fields)
+        db.add(g)
+        db.commit()
+        return g.id
+
+
+def _apply_changes(gid: int, changes: dict) -> str | None:
+    """Apply field changes to a game (runs in a thread). Returns its title,
+    or None when no such game exists."""
+    with SessionLocal() as db:
+        g = db.get(BoardGame, gid)
+        if not g:
+            return None
+        for k, v in changes.items():
+            setattr(g, k, v)
+        db.commit()
+        return g.title
+
+
+_CONDITION_HINT = "Like New / Fair / Damaged / Damaged, Missing Pieces"
+
+
+class AddGameModal(discord.ui.Modal, title="Add a board game"):
+    """Quick-add form: the five fields that matter most (Discord caps modals
+    at 5 inputs). A BGG link auto-fills publisher, players, image, and tags;
+    the long-tail fields remain as options on /game add."""
+
+    bgg_link = discord.ui.TextInput(
+        label="BGG link (auto-fills details)",
+        required=False,
+        placeholder="https://boardgamegeek.com/boardgame/13/catan",
+        max_length=512,
+    )
+    game_title = discord.ui.TextInput(
+        label="Title (optional if a BGG link is given)", required=False, max_length=200
+    )
+    owner = discord.ui.TextInput(
+        label="Owner", required=False, placeholder="RBGA or a member's name", max_length=128
+    )
+    condition = discord.ui.TextInput(
+        label="Condition", required=False, placeholder=_CONDITION_HINT, max_length=64
+    )
+    price = discord.ui.TextInput(
+        label="Purchase price (dollars)", required=False, placeholder="45.00", max_length=16
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            price = parse_money(self.price.value)
+        except ValueError as e:
+            await interaction.followup.send(f"{e} Nothing was added.", ephemeral=True)
+            return
+
+        link = self.bgg_link.value.strip() or None
+        fields: dict = dict(
+            title=self.game_title.value.strip() or None,
+            owner=self.owner.value.strip() or None,
+            condition=self.condition.value.strip() or None,
+            price=price,
+            bgg_link=link,
+        )
+        if link:
+            data, err = await _bgg_autofill(link)
+            if err:
+                await interaction.followup.send(err, ephemeral=True)
+                return
+            fields["title"] = fields["title"] or data.get("title")
+            fields["publisher"] = data.get("publisher")
+            fields["min_players"] = data.get("min_players")
+            fields["max_players"] = data.get("max_players")
+            fields["image"] = data.get("image")
+            fields["thumbnail"] = data.get("thumbnail")
+            fields["tags"] = data.get("tags")
+        if not fields["title"]:
+            await interaction.followup.send(
+                "Give a title, or a BGG link to pull one from.", ephemeral=True
+            )
+            return
+        new_id = await _in_thread(lambda: _insert_game(**fields))
+        await interaction.followup.send(
+            f"Added **{fields['title']}** (id #{new_id}).", ephemeral=True
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        msg = "Sorry, something went wrong adding that. Please try again."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        print(f"[boardgames] add-form error: {error!r}")
+
+
+class EditGameModal(discord.ui.Modal):
+    """Pre-filled edit form for the five most-edited fields. Clearing a field
+    leaves it unchanged (edits can't null a field, same as the slash options);
+    the long-tail fields remain as options on /game edit."""
+
+    def __init__(self, g: BoardGame) -> None:
+        super().__init__(title=f"Edit #{g.id} {g.title}"[:45])
+        self.gid = g.id
+        self.game_title = discord.ui.TextInput(
+            label="Title", default=g.title, required=False, max_length=200
+        )
+        self.owner = discord.ui.TextInput(
+            label="Owner", default=g.owner or "", required=False, max_length=128
+        )
+        self.condition = discord.ui.TextInput(
+            label="Condition",
+            default=g.condition or "",
+            required=False,
+            placeholder=_CONDITION_HINT,
+            max_length=64,
+        )
+        self.price = discord.ui.TextInput(
+            label="Purchase price (dollars)",
+            default="" if g.price is None else f"{g.price:g}",
+            required=False,
+            max_length=16,
+        )
+        self.sell_price = discord.ui.TextInput(
+            label="Sell price (dollars)",
+            default="" if g.sell_price is None else f"{g.sell_price:g}",
+            required=False,
+            max_length=16,
+        )
+        for item in (self.game_title, self.owner, self.condition, self.price, self.sell_price):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            changes = dict(
+                title=self.game_title.value.strip() or None,
+                owner=self.owner.value.strip() or None,
+                condition=self.condition.value.strip() or None,
+                price=parse_money(self.price.value),
+                sell_price=parse_money(self.sell_price.value),
+            )
+        except ValueError as e:
+            await interaction.followup.send(f"{e} Nothing was changed.", ephemeral=True)
+            return
+        changes = {k: v for k, v in changes.items() if v is not None}
+        if not changes:
+            await interaction.followup.send("Nothing to change.", ephemeral=True)
+            return
+        name = await _in_thread(lambda: _apply_changes(self.gid, changes))
+        if name is None:
+            await interaction.followup.send("No game with that id.", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                f"Updated **{name}** ({', '.join(changes)}).", ephemeral=True
+            )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        msg = "Sorry, something went wrong saving that. Please try again."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        print(f"[boardgames] edit-form error: {error!r}")
+
+
+@game.command(name="add", description="Add a game (run with no options for a form; a BGG link auto-fills)")
 @app_commands.describe(
     bgg_link="BoardGameGeek URL; pulls title, publisher, players, and image",
     condition="Physical condition",
@@ -464,37 +666,24 @@ async def game_add(
     notes: str | None = None,
     tags: str | None = None,
 ):
+    # Bare /game add opens the quick-add form instead.
+    if not any(
+        v is not None
+        for v in (bgg_link, condition, price, sell_price, title, owner, publisher,
+                  min_players, max_players, location, notes, tags)
+    ):
+        await interaction.response.send_modal(AddGameModal())
+        return
+
     await interaction.response.defer(ephemeral=True)
 
     tag_list = parse_tags(tags)
     image = thumbnail = None
     # Pull details from BGG when a link is given; explicit args always win.
     if bgg_link:
-        bgg_id = extract_bgg_id(bgg_link)
-        if bgg_id is None:
-            await interaction.followup.send(
-                "That doesn't look like a BoardGameGeek link. Paste one like "
-                "`https://boardgamegeek.com/boardgame/13/catan`, or give a title instead.",
-                ephemeral=True,
-            )
-            return
-        try:
-            data = await fetch_game(bgg_id)
-        except BGGNotConfigured:
-            await interaction.followup.send(
-                "BGG lookups aren't set up yet (an admin needs to set `BGG_API_TOKEN`). "
-                "For now, add the game manually with a `title`.",
-                ephemeral=True,
-            )
-            return
-        except Exception:
-            data = None
-        if data is None:
-            await interaction.followup.send(
-                f"Couldn't fetch BGG id {bgg_id}. It may not exist, or BGG is busy. "
-                "Try again, or add the game manually with a title.",
-                ephemeral=True,
-            )
+        data, err = await _bgg_autofill(bgg_link)
+        if err:
+            await interaction.followup.send(err, ephemeral=True)
             return
         title = title or data.get("title")
         publisher = publisher or data.get("publisher")
@@ -510,33 +699,28 @@ async def game_add(
         )
         return
 
-    def mutate() -> int:
-        with SessionLocal() as db:
-            g = BoardGame(
-                title=title,
-                owner=owner,
-                condition=condition,
-                price=price,
-                sell_price=sell_price,
-                bgg_link=bgg_link,
-                image=image,
-                thumbnail=thumbnail,
-                publisher=publisher,
-                min_players=min_players,
-                max_players=max_players,
-                location=location,
-                notes=notes,
-                tags=tag_list,
-            )
-            db.add(g)
-            db.commit()
-            return g.id
-
-    new_id = await _in_thread(mutate)
+    new_id = await _in_thread(
+        lambda: _insert_game(
+            title=title,
+            owner=owner,
+            condition=condition,
+            price=price,
+            sell_price=sell_price,
+            bgg_link=bgg_link,
+            image=image,
+            thumbnail=thumbnail,
+            publisher=publisher,
+            min_players=min_players,
+            max_players=max_players,
+            location=location,
+            notes=notes,
+            tags=tag_list,
+        )
+    )
     await interaction.followup.send(f"Added **{title}** (id #{new_id}).", ephemeral=True)
 
 
-@game.command(name="edit", description="Edit a game (only the fields you set change)")
+@game.command(name="edit", description="Edit a game (pick it alone for a form; only set fields change)")
 @app_commands.describe(
     game="Start typing a title to pick the game",
     title="New title",
@@ -570,8 +754,6 @@ async def game_edit(
     price: float | None = None,
     sell_price: float | None = None,
 ):
-    await interaction.response.defer(ephemeral=True)
-
     # None means "leave unchanged" (fields can't be cleared to null via edit).
     changes = {
         k: v
@@ -591,21 +773,18 @@ async def game_edit(
         ).items()
         if v is not None
     }
+
+    # Just the game picked, no fields: open the pre-filled edit form.
     if not changes:
-        await interaction.followup.send("Nothing to change; set at least one field.", ephemeral=True)
+        g = await _in_thread(lambda: _get_game(game))
+        if not g:
+            await interaction.response.send_message("No game with that id.", ephemeral=True)
+            return
+        await interaction.response.send_modal(EditGameModal(g))
         return
 
-    def mutate() -> str | None:
-        with SessionLocal() as db:
-            g = db.get(BoardGame, game)
-            if not g:
-                return None
-            for k, v in changes.items():
-                setattr(g, k, v)
-            db.commit()
-            return g.title
-
-    name = await _in_thread(mutate)
+    await interaction.response.defer(ephemeral=True)
+    name = await _in_thread(lambda: _apply_changes(game, changes))
     if name is None:
         await interaction.followup.send("No game with that id.", ephemeral=True)
     else:
