@@ -544,13 +544,13 @@ def disclosure_text(category: str) -> str:
     """The policy §3 promises and disclosures, shown BEFORE the form opens so
     every submitter has seen them (policy §11 condition 2)."""
     return (
-        "**Before you continue, here is how this works:**\n"
-        "• **Anonymous**: the club records nothing about who you are (no account, "
+        "Before you continue, here is how this works:\n"
+        "• Anonymous: the club records nothing about who you are (no account, "
         "no address), and the people handling it cannot see who submitted it.\n"
-        f"• **Who will read it**: {_DISCLOSURE_DESTINATION[category]}.\n"
-        "• **Contact is optional** and the only thing that could identify you. "
+        f"• Who will read it: {_DISCLOSURE_DESTINATION[category]}.\n"
+        "• Contact is optional and the only thing that could identify you. "
         "Leave it blank to stay anonymous.\n"
-        "• If the club refers your complaint to **RUSU** and you left contact "
+        "• If the club refers your complaint to RUSU and you left contact "
         "details, those may be shared as part of the referral.\n"
         "• Submitting here uses your Discord account to send the request, though "
         "the club never records it.\n"
