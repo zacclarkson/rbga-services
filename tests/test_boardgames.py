@@ -214,3 +214,24 @@ def test_list_view_renders_header_and_buttons():
     view._sync_buttons()
     assert not view.prev_btn.disabled and view.next_btn.disabled
     assert "page two" in view.render()["content"]
+
+
+def test_export_csv_round_trips():
+    import csv as _csv
+    import io as _io
+
+    games = [
+        _game(id=1, title="Catan", owner="RBGA", condition="Fair",
+              price=45.0, tags=["Economic", "Negotiation"]),
+        _game(id=2, title="Uno, Deluxe"),  # comma in title must survive quoting
+    ]
+    rows = list(_csv.reader(_io.StringIO(bot_bg.export_csv(games))))
+    assert rows[0] == bot_bg._EXPORT_FIELDS
+    assert len(rows) == 3
+    catan = dict(zip(rows[0], rows[1]))
+    assert catan["title"] == "Catan"
+    assert catan["tags"] == "Economic; Negotiation"
+    assert catan["price"] == "45.0"
+    uno = dict(zip(rows[0], rows[2]))
+    assert uno["title"] == "Uno, Deluxe"
+    assert uno["tags"] == ""

@@ -1,12 +1,14 @@
 """Discord CRUD for the board-game inventory: the `/game` command group.
 
 Writes the same `board_games` table the REST API serves (rbga/api/routers/
-boardgames.py), via the shared db layer. List/info are open to everyone; add/edit/
-remove are gated to the exec role (see rbga/bot/common.py).
+boardgames.py), via the shared db layer. List/gallery/info/export are open to
+everyone; add/edit/remove are gated to the exec role (see rbga/bot/common.py).
 
 Titles aren't unique (e.g. Polyhedral Dice Set ×4), so info/edit/remove take a
 numeric id, disambiguated for the user by autocomplete that shows "Title (owner)".
 """
+import csv
+import io
 from typing import Literal
 
 import discord
@@ -289,6 +291,56 @@ async def game_gallery(
 
     view = GalleryView(games)
     view.message = await interaction.followup.send(view=view, **view.render())
+
+
+# --- export (the whole inventory in one file) ---------------------------------
+
+_EXPORT_FIELDS = [
+    "id", "title", "owner", "condition", "price", "location",
+    "publisher", "min_players", "max_players", "tags", "bgg_link", "notes",
+]
+
+
+def export_csv(games: list[BoardGame]) -> str:
+    """The inventory as CSV text, one row per game (tags joined with '; ')."""
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(_EXPORT_FIELDS)
+    for g in games:
+        row = [getattr(g, f) for f in _EXPORT_FIELDS]
+        row[_EXPORT_FIELDS.index("tags")] = "; ".join(g.tags or [])
+        writer.writerow(row)
+    return buf.getvalue()
+
+
+@game.command(name="export", description="Download the whole inventory as a CSV file")
+@app_commands.describe(
+    owner="Only include games owned by this person/RBGA",
+    condition="Only include games in this condition",
+    search="Only include games whose title contains this text",
+    tag="Only include games with this tag",
+)
+@app_commands.autocomplete(owner=owner_autocomplete)
+async def game_export(
+    interaction: discord.Interaction,
+    owner: str | None = None,
+    condition: Condition | None = None,
+    search: str | None = None,
+    tag: str | None = None,
+):
+    await interaction.response.defer()
+
+    games = await _in_thread(lambda: _query_games(owner, condition, search, tag))
+    if not games:
+        await interaction.followup.send("No board games match that.")
+        return
+
+    # utf-8-sig so Excel detects the encoding (titles have accents, ×, etc.).
+    payload = io.BytesIO(export_csv(games).encode("utf-8-sig"))
+    await interaction.followup.send(
+        f"**{len(games)} game(s)**, the full set in one file:",
+        file=discord.File(payload, filename="rbga-board-games.csv"),
+    )
 
 
 @game.command(name="info", description="Show full details for one game")
