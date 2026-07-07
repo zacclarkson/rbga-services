@@ -190,6 +190,14 @@ def _target_id(kind: str, symbol: str | None, targets: dict) -> str | None:
     return None
 
 
+def tier_ready(category: str, targets: dict) -> bool:
+    """Whether the handler tier for `category` has a destination configured
+    (via /complaints-setup or the env fallback), i.e. a new complaint of this
+    category could actually be delivered rather than sitting unrouted."""
+    kind, symbol = destination_for(category)
+    return bool(_target_id(kind, symbol, targets))
+
+
 # --- Discord presentation ---------------------------------------------------
 _STATUS_COLOUR = {
     "new": discord.Colour.orange(),
@@ -501,6 +509,24 @@ async def complain(interaction: discord.Interaction, about: app_commands.Choice[
         await interaction.response.send_message(
             "Complaints about the president are handled **independently of the club**, "
             f"so please contact one of these directly:\n{RUSU_LINKS}",
+            ephemeral=True,
+        )
+        return
+    # Don't take a complaint that has nowhere to go — tell the submitter routing
+    # hasn't been configured instead of letting it sit unrouted in the DB.
+    try:
+        ready = tier_ready(about.value, await resolve_targets())
+    except Exception as e:
+        # Fail open: a transient API error shouldn't block complaints (submission
+        # itself will surface the error if the API really is down).
+        print(f"[complaints] setup check failed, allowing submission: {e!r}")
+        ready = True
+    if not ready:
+        who = f"the server owner or someone with the **{ADMIN_ROLE}** role" if ADMIN_ROLE else "the server owner"
+        await interaction.response.send_message(
+            "The complaints system hasn't been fully set up yet, so this complaint "
+            f"couldn't be delivered. Please ask {who} to run **/complaints-setup** first, "
+            "then try again.",
             ephemeral=True,
         )
         return

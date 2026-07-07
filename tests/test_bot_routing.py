@@ -73,6 +73,25 @@ def test_is_authorised_denies_in_dm():
     assert not c.is_authorised(user_id=1, owner_id=None, user_role_names=[], admin_role="Exec")
 
 
+@pytest.mark.parametrize(
+    "category,targets,ready",
+    [
+        # Each tier only needs *its own* destination set.
+        ("member", {"committee": "100", "exec": None, "president": None}, True),
+        ("committee", {"committee": None, "exec": "200", "president": None}, True),
+        ("exec", {"committee": None, "exec": None, "president": "300"}, True),
+        # Missing destination for the tier -> not ready, even if others are set.
+        ("member", {"committee": None, "exec": "200", "president": "300"}, False),
+        ("committee", {"committee": "100", "exec": None, "president": "300"}, False),
+        ("exec", {"committee": "100", "exec": "200", "president": None}, False),
+    ],
+)
+def test_tier_ready(category, targets, ready):
+    # /complain refuses up front (asking for /complaints-setup) when the tier a
+    # complaint would route to has no destination configured.
+    assert c.tier_ready(category, targets) is ready
+
+
 def test_merge_targets_saved_wins_then_env_then_none():
     config = {"committee": "100", "exec": None, "president": None}
     env = {"committee": "999", "exec": "200", "president": None}
