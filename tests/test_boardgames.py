@@ -1,8 +1,16 @@
-"""Board-game tags: storage round-trip, tag filter, BGG category parsing."""
+"""Board-game tags: storage round-trip, tag filter, BGG category parsing,
+and the BGG enrichment pass."""
+import asyncio
+
 import pytest
+from sqlalchemy import select
 
 from rbga.bgg import parse_thing
 from rbga.bot.boardgames import parse_tags
+from rbga.db import enrich_boardgames
+from rbga.db.database import SessionLocal
+from rbga.db.enrich_boardgames import enrich, needs_image
+from rbga.db.models import BoardGame
 
 
 def _add(client, token, title, tags=None):
@@ -72,3 +80,56 @@ def test_bgg_no_categories_means_no_tags():
       <name type="primary" value="Mystery Game"/>
     </item></items>"""
     assert parse_thing(xml)["tags"] is None
+
+
+# --- enrichment pass ----------------------------------------------------------
+@pytest.mark.parametrize(
+    "image,needed",
+    [
+        (None, True),
+        ("", True),
+        ("SomePhoto.jpg", True),  # bare SharePoint filename from the CSV import
+        ("https://cf.geekdo-images.com/x.jpg", False),
+        ("http://example.com/y.png", False),
+    ],
+)
+def test_needs_image(image, needed):
+    assert needs_image(image) is needed
+
+
+def test_enrich_fills_missing_fields_only(monkeypatch):
+    with SessionLocal() as db:
+        db.add(
+            BoardGame(
+                title="Catan",
+                bgg_link="https://boardgamegeek.com/boardgame/13/catan",
+                image="Catan.jpg",  # unusable filename: should be replaced
+                publisher="Hand Entered",  # should be kept
+            )
+        )
+        db.add(BoardGame(title="No Link"))  # untouched, reported as missing image
+        db.commit()
+
+    async def fake_fetch(bgg_id):
+        assert bgg_id == 13
+        return {
+            "title": "Catan",
+            "publisher": "KOSMOS",
+            "min_players": 3,
+            "max_players": 4,
+            "image": "https://cf.geekdo-images.com/catan.jpg",
+            "tags": ["Economic", "Negotiation"],
+        }
+
+    monkeypatch.setattr(enrich_boardgames, "fetch_game", fake_fetch)
+    updated = asyncio.run(enrich(delay=0))
+    assert updated == 1
+
+    with SessionLocal() as db:
+        catan = db.scalars(select(BoardGame).filter_by(title="Catan")).one()
+        assert catan.image == "https://cf.geekdo-images.com/catan.jpg"
+        assert catan.tags == ["Economic", "Negotiation"]
+        assert catan.publisher == "Hand Entered"  # not overwritten
+        assert catan.min_players == 3 and catan.max_players == 4
+        nolink = db.scalars(select(BoardGame).filter_by(title="No Link")).one()
+        assert nolink.image is None
