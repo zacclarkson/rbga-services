@@ -74,11 +74,32 @@ async def owner_autocomplete(
 
 # --- read (open to everyone) ------------------------------------------------
 
+def _query_games(
+    owner: str | None, condition: str | None, search: str | None, tag: str | None
+) -> list[BoardGame]:
+    """Shared filter query for /game list and /game gallery (runs in a thread)."""
+    with SessionLocal() as db:
+        stmt = select(BoardGame)
+        if owner:
+            stmt = stmt.where(BoardGame.owner == owner)
+        if condition:
+            stmt = stmt.where(BoardGame.condition == condition)
+        if search:
+            stmt = stmt.where(BoardGame.title.ilike(f"%{search}%"))
+        games = list(db.scalars(stmt.order_by(BoardGame.title)).all())
+    if tag:
+        # JSON column, so filter in Python (portable; the inventory is small).
+        wanted = tag.casefold()
+        games = [g for g in games if any(t.casefold() == wanted for t in (g.tags or []))]
+    return games
+
+
 @game.command(name="list", description="List board games, optionally filtered")
 @app_commands.describe(
     owner="Only show games owned by this person/RBGA",
     condition="Only show games in this condition",
     search="Only show games whose title contains this text",
+    tag="Only show games with this tag",
 )
 @app_commands.autocomplete(owner=owner_autocomplete)
 async def game_list(
@@ -86,21 +107,11 @@ async def game_list(
     owner: str | None = None,
     condition: Condition | None = None,
     search: str | None = None,
+    tag: str | None = None,
 ):
     await interaction.response.defer()
 
-    def query() -> list[BoardGame]:
-        with SessionLocal() as db:
-            stmt = select(BoardGame)
-            if owner:
-                stmt = stmt.where(BoardGame.owner == owner)
-            if condition:
-                stmt = stmt.where(BoardGame.condition == condition)
-            if search:
-                stmt = stmt.where(BoardGame.title.ilike(f"%{search}%"))
-            return list(db.scalars(stmt.order_by(BoardGame.title)).all())
-
-    games = await _in_thread(query)
+    games = await _in_thread(lambda: _query_games(owner, condition, search, tag))
     if not games:
         await interaction.followup.send("No board games match that.")
         return
@@ -122,6 +133,120 @@ async def game_list(
     if shown < len(games):
         header += f" (showing first {shown}; refine with filters)"
     await interaction.followup.send(header + "\n" + "\n".join(lines))
+
+
+# --- gallery (embed cards with images, paginated) ----------------------------
+
+GALLERY_PAGE = 10  # Discord's embeds-per-message cap
+
+
+def gallery_pages(total: int) -> int:
+    """How many pages a gallery of `total` games needs."""
+    return max(1, (total + GALLERY_PAGE - 1) // GALLERY_PAGE)
+
+
+def game_card(g: BoardGame) -> discord.Embed:
+    """A compact embed card: details in the body, the game's image as a
+    thumbnail (only when it's a real URL; CSV rows may hold bare filenames)."""
+    bits = []
+    if g.owner:
+        bits.append(f"Owner: {g.owner}")
+    if g.condition:
+        bits.append(f"Condition: {g.condition}")
+    if g.min_players or g.max_players:
+        lo, hi = g.min_players, g.max_players
+        bits.append("Players: " + (f"{lo}-{hi}" if lo and hi else str(lo or hi)))
+    if g.tags:
+        bits.append("Tags: " + ", ".join(g.tags[:6]))
+    e = discord.Embed(
+        title=f"#{g.id} {g.title}"[:256],
+        url=g.bgg_link or None,
+        description="\n".join(bits) or None,
+    )
+    if g.image and g.image.startswith(("http://", "https://")):
+        e.set_thumbnail(url=g.image)
+    return e
+
+
+def gallery_page_embeds(games: list[BoardGame], page: int) -> list[discord.Embed]:
+    start = page * GALLERY_PAGE
+    return [game_card(g) for g in games[start : start + GALLERY_PAGE]]
+
+
+def _gallery_header(total: int, page: int) -> str:
+    return f"**{total} game(s)**, page {page + 1}/{gallery_pages(total)}"
+
+
+class GalleryView(discord.ui.View):
+    """Prev/Next pager for the gallery. Transient by design (the game list is
+    held in memory): buttons stop working after the timeout or a bot restart,
+    and the row is removed on timeout. Just run /game gallery again."""
+
+    def __init__(self, games: list[BoardGame], page: int = 0) -> None:
+        super().__init__(timeout=300)
+        self.games = games
+        self.page = page
+        self.message: discord.Message | None = None
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.prev_btn.disabled = self.page <= 0
+        self.next_btn.disabled = self.page >= gallery_pages(len(self.games)) - 1
+
+    async def _show(self, interaction: discord.Interaction) -> None:
+        self._sync_buttons()
+        await interaction.response.edit_message(
+            content=_gallery_header(len(self.games), self.page),
+            embeds=gallery_page_embeds(self.games, self.page),
+            view=self,
+        )
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.page = max(self.page - 1, 0)
+        await self._show(interaction)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.page = min(self.page + 1, gallery_pages(len(self.games)) - 1)
+        await self._show(interaction)
+
+    async def on_timeout(self) -> None:
+        if self.message:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass  # message may have been deleted
+
+
+@game.command(name="gallery", description="Browse games as image cards, 10 per page")
+@app_commands.describe(
+    owner="Only show games owned by this person/RBGA",
+    condition="Only show games in this condition",
+    search="Only show games whose title contains this text",
+    tag="Only show games with this tag",
+)
+@app_commands.autocomplete(owner=owner_autocomplete)
+async def game_gallery(
+    interaction: discord.Interaction,
+    owner: str | None = None,
+    condition: Condition | None = None,
+    search: str | None = None,
+    tag: str | None = None,
+):
+    await interaction.response.defer()
+
+    games = await _in_thread(lambda: _query_games(owner, condition, search, tag))
+    if not games:
+        await interaction.followup.send("No board games match that.")
+        return
+
+    view = GalleryView(games)
+    view.message = await interaction.followup.send(
+        content=_gallery_header(len(games), 0),
+        embeds=gallery_page_embeds(games, 0),
+        view=view,
+    )
 
 
 @game.command(name="info", description="Show full details for one game")

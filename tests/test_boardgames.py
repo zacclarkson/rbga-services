@@ -1,11 +1,12 @@
 """Board-game tags: storage round-trip, tag filter, BGG category parsing,
-and the BGG enrichment pass."""
+the BGG enrichment pass, and the /game gallery rendering."""
 import asyncio
 
 import pytest
 from sqlalchemy import select
 
 from rbga.bgg import parse_thing
+from rbga.bot import boardgames as bot_bg
 from rbga.bot.boardgames import parse_tags
 from rbga.db import enrich_boardgames
 from rbga.db.database import SessionLocal
@@ -133,3 +134,46 @@ def test_enrich_fills_missing_fields_only(monkeypatch):
         assert catan.min_players == 3 and catan.max_players == 4
         nolink = db.scalars(select(BoardGame).filter_by(title="No Link")).one()
         assert nolink.image is None
+
+
+# --- gallery rendering ----------------------------------------------------------
+def _game(**kw) -> BoardGame:
+    return BoardGame(**{"title": "Catan", **kw})
+
+
+@pytest.mark.parametrize("total,pages", [(0, 1), (1, 1), (10, 1), (11, 2), (173, 18)])
+def test_gallery_pages(total, pages):
+    assert bot_bg.gallery_pages(total) == pages
+
+
+def test_game_card_uses_url_image_as_thumbnail():
+    card = bot_bg.game_card(
+        _game(id=9, image="https://cf.geekdo-images.com/x.jpg", tags=["Economic"], owner="RBGA")
+    )
+    assert card.title == "#9 Catan"
+    assert card.thumbnail.url == "https://cf.geekdo-images.com/x.jpg"
+    assert "Tags: Economic" in card.description
+    assert "Owner: RBGA" in card.description
+
+
+def test_game_card_skips_bare_filename_image():
+    card = bot_bg.game_card(_game(id=1, image="Catan.jpg"))
+    assert card.thumbnail.url is None
+
+
+def test_gallery_page_embeds_slices_ten_per_page():
+    games = [_game(id=i, title=f"G{i}") for i in range(1, 24)]  # 23 games
+    assert len(bot_bg.gallery_page_embeds(games, 0)) == 10
+    assert len(bot_bg.gallery_page_embeds(games, 2)) == 3
+    assert bot_bg.gallery_page_embeds(games, 1)[0].title == "#11 G11"
+
+
+def test_gallery_view_button_states():
+    one_page = bot_bg.GalleryView([_game(id=1)])
+    assert one_page.prev_btn.disabled and one_page.next_btn.disabled
+
+    many = bot_bg.GalleryView([_game(id=i) for i in range(1, 24)])
+    assert many.prev_btn.disabled and not many.next_btn.disabled
+    many.page = 2  # last page of 23 games
+    many._sync_buttons()
+    assert not many.prev_btn.disabled and many.next_btn.disabled
