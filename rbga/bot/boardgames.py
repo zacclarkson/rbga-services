@@ -147,7 +147,9 @@ def gallery_pages(total: int) -> int:
 
 def game_card(g: BoardGame) -> discord.Embed:
     """A compact embed card: details in the body, the game's image as a
-    thumbnail (only when it's a real URL; CSV rows may hold bare filenames)."""
+    thumbnail. Prefers the small BGG thumbnail variant (Discord's proxy times
+    out on multi-MB originals when a page shows ten at once); only real URLs
+    are used (CSV rows may hold bare filenames)."""
     bits = []
     if g.owner:
         bits.append(f"Owner: {g.owner}")
@@ -163,8 +165,9 @@ def game_card(g: BoardGame) -> discord.Embed:
         url=g.bgg_link or None,
         description="\n".join(bits) or None,
     )
-    if g.image and g.image.startswith(("http://", "https://")):
-        e.set_thumbnail(url=g.image)
+    small = g.thumbnail or g.image
+    if small and small.startswith(("http://", "https://")):
+        e.set_thumbnail(url=small)
     return e
 
 
@@ -325,7 +328,7 @@ async def game_add(
     await interaction.response.defer(ephemeral=True)
 
     tag_list = parse_tags(tags)
-    image = None
+    image = thumbnail = None
     # Pull details from BGG when a link is given; explicit args always win.
     if bgg_link:
         bgg_id = extract_bgg_id(bgg_link)
@@ -359,6 +362,7 @@ async def game_add(
         min_players = min_players if min_players is not None else data.get("min_players")
         max_players = max_players if max_players is not None else data.get("max_players")
         image = data.get("image")
+        thumbnail = data.get("thumbnail")
         tag_list = tag_list or data.get("tags")
 
     if not title:
@@ -376,6 +380,7 @@ async def game_add(
                 price=price,
                 bgg_link=bgg_link,
                 image=image,
+                thumbnail=thumbnail,
                 publisher=publisher,
                 min_players=min_players,
                 max_players=max_players,

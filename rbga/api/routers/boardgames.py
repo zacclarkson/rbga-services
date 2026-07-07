@@ -22,6 +22,7 @@ class BoardGameIn(BaseModel):
     condition: str | None = None
     bgg_link: str | None = None
     image: str | None = None
+    thumbnail: str | None = None
     price: float | None = None
     tags: list[str] | None = None
 

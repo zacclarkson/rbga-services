@@ -7,6 +7,8 @@ fills in ONLY what's missing or unusable:
 
   * image     — set when absent or not a URL (CSV imports stored bare
                 SharePoint filenames the web page can't render)
+  * thumbnail — set when absent or not a URL (BGG's small variant; Discord
+                embed thumbnails choke on the multi-MB originals)
   * tags      — set when empty (BGG categories)
   * publisher — set when empty
   * min/max players — set when empty
@@ -62,6 +64,9 @@ async def enrich(dry_run: bool = False, delay: float = 1.0) -> int:
             if needs_image(g.image) and data.get("image"):
                 g.image = data["image"]
                 changes.append("image")
+            if needs_image(g.thumbnail) and data.get("thumbnail"):
+                g.thumbnail = data["thumbnail"]
+                changes.append("thumbnail")
             if not g.tags and data.get("tags"):
                 g.tags = data["tags"]
                 changes.append("tags")

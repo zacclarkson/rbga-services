@@ -45,6 +45,10 @@ class BoardGame(Base):
     # Raw SharePoint attachment filename for CSV imports; a real image URL for
     # BGG imports (see rbga/bgg.py).
     image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # BGG's small image variant. The full `image` is often a multi-MB original
+    # that Discord's media proxy times out on when a gallery page shows ten at
+    # once; embed thumbnails use this instead.
+    thumbnail: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Purchase value in dollars (the SharePoint export's "Cost" field).
     price: Mapped[float | None] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
     # Free-form labels as a JSON list of strings (e.g. ["Strategy", "Party"]).

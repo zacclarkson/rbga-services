@@ -92,6 +92,8 @@ def parse_thing(xml: bytes) -> dict | None:
         "max_players": _int(item, "maxplayers"),
         "year": _int(item, "yearpublished"),
         "image": _first(item, "image", attr=None),
+        # Small variant; embed thumbnails use this (originals are huge).
+        "thumbnail": _first(item, "thumbnail", attr=None),
         "tags": tags or None,
     }
 

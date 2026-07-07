@@ -69,11 +69,13 @@ def test_bgg_categories_become_tags():
       <link type="boardgamecategory" id="1021" value="Economic"/>
       <link type="boardgamecategory" id="1026" value="Negotiation"/>
       <link type="boardgamepublisher" id="37" value="KOSMOS"/>
+      <thumbnail>https://cf.geekdo-images.com/x__thumb.jpg</thumbnail>
       <minplayers value="3"/><maxplayers value="4"/>
     </item></items>"""
     data = parse_thing(xml)
     assert data["tags"] == ["Economic", "Negotiation"]
     assert data["publisher"] == "KOSMOS"  # category scan doesn't eat other links
+    assert data["thumbnail"] == "https://cf.geekdo-images.com/x__thumb.jpg"
 
 
 def test_bgg_no_categories_means_no_tags():
@@ -154,6 +156,19 @@ def test_game_card_uses_url_image_as_thumbnail():
     assert card.thumbnail.url == "https://cf.geekdo-images.com/x.jpg"
     assert "Tags: Economic" in card.description
     assert "Owner: RBGA" in card.description
+
+
+def test_game_card_prefers_small_thumbnail_over_original():
+    # Discord's proxy times out on multi-MB originals; the card must use the
+    # small BGG thumbnail variant when one is stored.
+    card = bot_bg.game_card(
+        _game(
+            id=9,
+            image="https://cf.geekdo-images.com/x__original.jpg",
+            thumbnail="https://cf.geekdo-images.com/x__thumb.jpg",
+        )
+    )
+    assert card.thumbnail.url == "https://cf.geekdo-images.com/x__thumb.jpg"
 
 
 def test_game_card_skips_bare_filename_image():
