@@ -100,7 +100,8 @@ async def fetch_game(bgg_id: int, *, retries: int = 3) -> dict | None:
     """Fetch and parse a game from BGG. Returns None if the id is unknown.
 
     Requires BGG_API_TOKEN (BGG now rejects anonymous requests with 401). BGG
-    occasionally answers 202 ("request queued, retry"); we back off briefly.
+    occasionally answers 202 ("request queued, retry") and rate-limits bulk
+    callers with 429; both get a backoff-and-retry (429 honours Retry-After).
     """
     if not BGG_API_TOKEN:
         raise BGGNotConfigured
@@ -109,8 +110,12 @@ async def fetch_game(bgg_id: int, *, retries: int = 3) -> dict | None:
     async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
         for attempt in range(retries):
             async with session.get(_THING_URL, params={"id": str(bgg_id)}) as resp:
-                if resp.status == 202:
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                if resp.status in (202, 429):
+                    try:
+                        retry_after = float(resp.headers.get("Retry-After", ""))
+                    except ValueError:
+                        retry_after = 0.0
+                    await asyncio.sleep(max(retry_after, 3.0 * (attempt + 1)))
                     continue
                 resp.raise_for_status()
                 return parse_thing(await resp.read())
