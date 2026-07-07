@@ -235,7 +235,7 @@ async def _post(client: discord.Client, kind: str, symbol: str | None, c: dict, 
         print(f"[complaints] no {who} destination set; run /complaints-setup to route complaint #{c['id']}.")
         return False
 
-    embed, view = _embed(c), ComplaintView()
+    embed, view = _embed(c), complaint_view(c["id"])
     if kind == "channel":
         channel = client.get_channel(int(target_id)) or await client.fetch_channel(int(target_id))
         await channel.send(embed=embed, view=view)
@@ -257,7 +257,7 @@ async def _route(client: discord.Client, c: dict, targets: dict) -> bool:
 
 async def _refresh(interaction: discord.Interaction, c: dict) -> None:
     """Update the original notification's embed; drop the buttons once closed."""
-    view = None if c["status"] == "closed" else ComplaintView()
+    view = None if c["status"] == "closed" else complaint_view(c["id"])
     await interaction.message.edit(embed=_embed(c), view=view)
 
 
@@ -272,23 +272,20 @@ async def _send_body(interaction: discord.Interaction, cid: int, c: dict) -> Non
 
 
 # --- button handlers --------------------------------------------------------
-async def _do_view(interaction: discord.Interaction) -> None:
+async def _do_view(interaction: discord.Interaction, cid: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    cid = _complaint_id(interaction)
     await _send_body(interaction, cid, await _api_get(cid))
 
 
-async def _do_status(interaction: discord.Interaction, status: str) -> None:
+async def _do_status(interaction: discord.Interaction, cid: int, status: str) -> None:
     await interaction.response.defer(ephemeral=True)
-    cid = _complaint_id(interaction)
     c = await _api_patch(cid, status=status)
     await _refresh(interaction, c)
     await interaction.followup.send(f"Complaint #{cid} → {status}.", ephemeral=True)
 
 
-async def _do_escalate(interaction: discord.Interaction) -> None:
+async def _do_escalate(interaction: discord.Interaction, cid: int) -> None:
     await interaction.response.defer(ephemeral=True)
-    cid = _complaint_id(interaction)
     category = (await _api_get(cid))["category"]
     target = next_escalation_target(category)
     c = await _api_patch(cid, status="escalated", escalated_to=target)
@@ -306,28 +303,82 @@ async def _do_escalate(interaction: discord.Interaction) -> None:
         await interaction.followup.send(f"Escalated complaint #{cid} to the {target}.{tail}", ephemeral=True)
 
 
+# Action name -> (label, style). Order is the button order in the row.
+_ACTIONS: dict[str, tuple[str, discord.ButtonStyle]] = {
+    "view": ("View", discord.ButtonStyle.secondary),
+    "ack": ("Acknowledge", discord.ButtonStyle.primary),
+    "escalate": ("Escalate", discord.ButtonStyle.danger),
+    "close": ("Close", discord.ButtonStyle.success),
+}
+
+
+class ComplaintAction(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"complaint:(?P<action>view|ack|escalate|close):(?P<id>[0-9]+)",
+):
+    """A complaint button whose custom_id carries both the action and the
+    complaint id (e.g. "complaint:view:42"). Dynamic items are rebuilt from the
+    custom_id on every click, so they work across bot restarts with no
+    registered view instance and no reliance on the embed title."""
+
+    def __init__(self, action: str, cid: int) -> None:
+        label, style = _ACTIONS[action]
+        super().__init__(
+            discord.ui.Button(label=label, style=style, custom_id=f"complaint:{action}:{cid}")
+        )
+        self.action = action
+        self.cid = cid
+
+    @classmethod
+    async def from_custom_id(
+        cls, interaction: discord.Interaction, item: discord.ui.Button, match: "re.Match[str]"
+    ) -> "ComplaintAction":
+        return cls(match["action"], int(match["id"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if self.action == "view":
+            await _do_view(interaction, self.cid)
+        elif self.action == "ack":
+            await _do_status(interaction, self.cid, "acknowledged")
+        elif self.action == "escalate":
+            await _do_escalate(interaction, self.cid)
+        else:
+            await _do_status(interaction, self.cid, "closed")
+
+
+def complaint_view(cid: int) -> discord.ui.View:
+    """The action row for a complaint notification, with the complaint id
+    embedded in every button's custom_id."""
+    view = discord.ui.View(timeout=None)
+    for action in _ACTIONS:
+        view.add_item(ComplaintAction(action, cid))
+    return view
+
+
 class ComplaintView(discord.ui.View):
-    """Persistent (timeout=None) action row. One instance registered at startup
-    handles every complaint message; the complaint id is read from the embed."""
+    """LEGACY persistent (timeout=None) action row, for messages posted before
+    the complaint id moved into the custom_id. One instance registered at
+    startup handles those; the id is read from the embed title. New
+    notifications use complaint_view() / ComplaintAction instead."""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
 
     @discord.ui.button(label="View", style=discord.ButtonStyle.secondary, custom_id="complaint:view")
     async def view_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _do_view(interaction)
+        await _do_view(interaction, _complaint_id(interaction))
 
     @discord.ui.button(label="Acknowledge", style=discord.ButtonStyle.primary, custom_id="complaint:ack")
     async def ack_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _do_status(interaction, "acknowledged")
+        await _do_status(interaction, _complaint_id(interaction), "acknowledged")
 
     @discord.ui.button(label="Escalate", style=discord.ButtonStyle.danger, custom_id="complaint:escalate")
     async def escalate_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _do_escalate(interaction)
+        await _do_escalate(interaction, _complaint_id(interaction))
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.success, custom_id="complaint:close")
     async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await _do_status(interaction, "closed")
+        await _do_status(interaction, _complaint_id(interaction), "closed")
 
 
 # --- setup wizard (owner / admin only) --------------------------------------
@@ -571,6 +622,9 @@ def start_polling(client: discord.Client) -> None:
 
 def setup(client: discord.Client, tree: app_commands.CommandTree) -> None:
     """Register the persistent complaint buttons, /complaints-setup and /complain."""
+    # New-style buttons: rebuilt from the custom_id on every click.
+    client.add_dynamic_items(ComplaintAction)
+    # Legacy buttons on messages posted before the id lived in the custom_id.
     client.add_view(ComplaintView())
     tree.add_command(complaints_setup)
     tree.add_command(complain)

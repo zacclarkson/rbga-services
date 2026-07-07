@@ -52,7 +52,39 @@ def test_is_submittable(category, ok):
 
 
 def test_complaint_id_regex_reads_the_embed_title():
+    # Legacy path: messages posted before the id lived in the custom_id.
     assert c._ID_RE.search("Complaint #42").group(1) == "42"
+
+
+# --- dynamic buttons (id carried in the custom_id) ----------------------------
+@pytest.mark.parametrize("action", ["view", "ack", "escalate", "close"])
+def test_dynamic_template_matches_and_extracts(action):
+    pat = c.ComplaintAction.__discord_ui_compiled_template__
+    m = pat.fullmatch(f"complaint:{action}:42")
+    assert m is not None
+    assert m["action"] == action
+    assert m["id"] == "42"
+
+
+@pytest.mark.parametrize(
+    "custom_id",
+    ["complaint:view", "complaint:ack", "complaint:view:", "complaint:nuke:1", "complaint:view:x"],
+)
+def test_dynamic_template_ignores_legacy_and_junk_ids(custom_id):
+    # Legacy ids (no trailing :id) stay with the registered ComplaintView.
+    pat = c.ComplaintAction.__discord_ui_compiled_template__
+    assert pat.fullmatch(custom_id) is None
+
+
+def test_complaint_view_builder_embeds_the_id():
+    view = c.complaint_view(7)
+    assert view.timeout is None
+    assert [item.custom_id for item in view.children] == [
+        "complaint:view:7",
+        "complaint:ack:7",
+        "complaint:escalate:7",
+        "complaint:close:7",
+    ]
 
 
 # --- setup wizard access + config resolution --------------------------------
