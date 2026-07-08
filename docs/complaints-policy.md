@@ -130,8 +130,10 @@ closed**. The club records which stage a complaint is at.
 
 ## 8. Retention
 
-- Complaints are kept for **365 days (12 months)** after they are closed, then
-  permanently deleted.
+- Complaints are permanently deleted at the **turn of the calendar year**: on
+  1 January, every complaint **closed in a previous year** is deleted.
+- A complaint that is still open is never deleted automatically, however old;
+  it is deleted at the first new year after it is closed.
 - Deletion is automatic, and the record of a deletion never includes the
   complaint's contents.
 - The exec may revise the retention period.

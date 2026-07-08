@@ -58,5 +58,11 @@ Cron on the deploy host:
 0 3 * * * cd ~/servers/rbga && docker compose run --rm api python -m rbga.db.purge_complaints >> ~/servers/rbga/purge.log 2>&1
 ```
 
-`COMPLAINTS_RETENTION_DAYS` (currently 365) is the exec's number; change it by
+The cron is deliberately daily even though deletion happens at the turn of the
+calendar year: the purge is idempotent (it deletes complaints closed in a
+previous year, so most runs delete nothing) and a daily schedule self-heals if
+the box is down on 1 January.
+
+`COMPLAINTS_RETENTION_YEARS` (currently 1, i.e. a closed complaint is deleted
+at the first new year after it closes) is the exec's number; change it by
 editing the one env var.
