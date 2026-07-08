@@ -41,11 +41,27 @@ complaints. Create it once per database, as the postgres superuser:
 ```sql
 CREATE ROLE rbga_bot LOGIN PASSWORD '<generated>';
 GRANT USAGE ON SCHEMA public TO rbga_bot;
-GRANT SELECT, INSERT, UPDATE, DELETE ON keys, board_games TO rbga_bot;
+GRANT SELECT, INSERT, UPDATE, DELETE ON keys, board_games, owners TO rbga_bot;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rbga_bot;
 REVOKE ALL ON SCHEMA complaints FROM rbga_bot, PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA complaints FROM rbga_bot, PUBLIC;
 ```
+
+Table grants only cover tables that exist when they run; so that tables added
+by future migrations are granted automatically, also run — **as the role that
+runs migrations** (the `DATABASE_URL` user, not the superuser, because default
+privileges apply to objects created by the role that sets them):
+
+```sql
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO rbga_bot;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO rbga_bot;
+```
+
+(Migration `0011` applies both of these on existing deployments. Complaints
+isolation is unaffected: it is the schema-level REVOKE above, and these
+defaults are scoped to `public`.)
 
 Then set `BOT_DATABASE_URL` to that role's connection string.
 
