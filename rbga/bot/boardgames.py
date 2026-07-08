@@ -468,6 +468,133 @@ async def _bgg_autofill(bgg_link: str) -> tuple[dict | None, str | None]:
     return data, None
 
 
+# --- donor-contact bookkeeping -------------------------------------------------
+# Owners are donors/lenders: the contact exists so the club can reach them when
+# they may want a game back. These prompts keep board_games.owner (free-text
+# name) and the owners table in sync without a hard FK.
+
+def owner_game_count(name: str) -> int:
+    with SessionLocal() as db:
+        return (
+            db.scalar(
+                select(func.count()).select_from(BoardGame).where(BoardGame.owner == name)
+            )
+            or 0
+        )
+
+
+def owner_contact_exists(name: str) -> bool:
+    with SessionLocal() as db:
+        return db.scalar(select(Owner.id).where(Owner.name == name)) is not None
+
+
+def delete_owner_contact(name: str) -> bool:
+    """Remove an owner's contact row; False when there was none."""
+    with SessionLocal() as db:
+        row = db.scalar(select(Owner).where(Owner.name == name))
+        if row is None:
+            return False
+        db.delete(row)
+        db.commit()
+        return True
+
+
+class RemoveOwnerContactView(discord.ui.View):
+    """Confirm dropping the contact of an owner with no games left. Ephemeral
+    and transient (same lifecycle as the pager views): after the timeout just
+    use /owner list + a manual check instead."""
+
+    def __init__(self, owner_name: str) -> None:
+        super().__init__(timeout=300)
+        self.owner_name = owner_name
+
+    @discord.ui.button(label="Remove contact", style=discord.ButtonStyle.danger)
+    async def remove_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        removed = await _in_thread(lambda: delete_owner_contact(self.owner_name))
+        self.stop()
+        msg = (
+            f"Removed the saved contact for **{self.owner_name}**."
+            if removed
+            else f"**{self.owner_name}** had no saved contact anymore."
+        )
+        await interaction.response.edit_message(content=msg, view=None)
+
+    @discord.ui.button(label="Keep it", style=discord.ButtonStyle.secondary)
+    async def keep_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"Kept **{self.owner_name}**'s contact.", view=None
+        )
+
+
+class AddOwnerContactModal(discord.ui.Modal):
+    """One-field form saving how to reach a new game owner."""
+
+    def __init__(self, owner_name: str) -> None:
+        super().__init__(title=f"Contact for {owner_name}"[:45])
+        self.owner_name = owner_name
+        self.contact = discord.ui.TextInput(
+            label="How to reach them",
+            placeholder="Discord handle, email, phone",
+            max_length=256,
+        )
+        self.add_item(self.contact)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        contact = self.contact.value.strip()
+        await _in_thread(lambda: set_owner_contact(self.owner_name, contact))
+        await interaction.response.send_message(
+            f"Saved contact for **{self.owner_name}**.", ephemeral=True
+        )
+
+
+class AddOwnerContactView(discord.ui.View):
+    """Button opening the contact form (modals can't be sent unprompted)."""
+
+    def __init__(self, owner_name: str) -> None:
+        super().__init__(timeout=300)
+        self.owner_name = owner_name
+
+    @discord.ui.button(label="Add contact", style=discord.ButtonStyle.primary)
+    async def add_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(AddOwnerContactModal(self.owner_name))
+
+
+async def prompt_owner_contact_upkeep(
+    interaction: discord.Interaction,
+    old_owner: str | None = None,
+    new_owner: str | None = None,
+) -> None:
+    """After a game mutation, nudge the exec to keep donor contacts in sync.
+
+    * old_owner left with zero games and a saved contact -> confirm removing it.
+    * new_owner whose only game is the one just written and who has no contact
+      -> offer to save one. The only-game condition keeps contact-less bulk
+      owners (RBGA itself) from nagging on every add.
+    Both messages are ephemeral follow-ups to an already-deferred interaction.
+    """
+    if old_owner and old_owner != new_owner:
+        if await _in_thread(lambda: owner_game_count(old_owner)) == 0 and await _in_thread(
+            lambda: owner_contact_exists(old_owner)
+        ):
+            await interaction.followup.send(
+                f"**{old_owner}** no longer owns any games in the inventory. "
+                "Remove their saved contact, or keep it in case they lend again?",
+                view=RemoveOwnerContactView(old_owner),
+                ephemeral=True,
+            )
+    if new_owner and new_owner != old_owner:
+        if await _in_thread(lambda: owner_game_count(new_owner)) == 1 and not await _in_thread(
+            lambda: owner_contact_exists(new_owner)
+        ):
+            await interaction.followup.send(
+                f"**{new_owner}** is a new owner with no saved contact. Add one so "
+                "the club can reach them about their game?",
+                view=AddOwnerContactView(new_owner),
+                ephemeral=True,
+            )
+
+
 # Fields refreshed from BGG when an edit changes the link. Title is deliberately
 # excluded: existing titles may be hand-customised (e.g. Polyhedral Dice Set ×4).
 _BGG_REFRESH_FIELDS = ("publisher", "min_players", "max_players", "image", "thumbnail", "tags")
@@ -568,6 +695,7 @@ class AddGameModal(discord.ui.Modal, title="Add a board game"):
         await interaction.followup.send(
             f"Added **{fields['title']}** (id #{new_id}).", ephemeral=True
         )
+        await prompt_owner_contact_upkeep(interaction, new_owner=fields["owner"])
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         msg = "Sorry, something went wrong adding that. Please try again."
@@ -631,6 +759,10 @@ class EditGameModal(discord.ui.Modal):
         if not changes:
             await interaction.followup.send("Nothing to change.", ephemeral=True)
             return
+        old_owner = None
+        if "owner" in changes:
+            g = await _in_thread(lambda: _get_game(self.gid))
+            old_owner = g.owner if g else None
         name = await _in_thread(lambda: _apply_changes(self.gid, changes))
         if name is None:
             await interaction.followup.send("No game with that id.", ephemeral=True)
@@ -638,6 +770,10 @@ class EditGameModal(discord.ui.Modal):
             await interaction.followup.send(
                 f"Updated **{name}** ({', '.join(changes)}).", ephemeral=True
             )
+            if "owner" in changes:
+                await prompt_owner_contact_upkeep(
+                    interaction, old_owner=old_owner, new_owner=changes["owner"]
+                )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
         msg = "Sorry, something went wrong saving that. Please try again."
@@ -732,6 +868,7 @@ async def game_add(
         )
     )
     await interaction.followup.send(f"Added **{title}** (id #{new_id}).", ephemeral=True)
+    await prompt_owner_contact_upkeep(interaction, new_owner=owner)
 
 
 @game.command(name="edit", description="Edit a game (pick it alone for a form; a new bgg_link refreshes details)")
@@ -828,12 +965,22 @@ async def game_edit(
             )
             return
 
+    # Reassigning the owner may orphan the old one's contact; snapshot it first.
+    old_owner = None
+    if "owner" in changes:
+        g = await _in_thread(lambda: _get_game(game))
+        old_owner = g.owner if g else None
+
     name = await _in_thread(lambda: _apply_changes(game, changes))
     if name is None:
         await interaction.followup.send("No game with that id.", ephemeral=True)
     else:
         fields = ", ".join(changes)
         await interaction.followup.send(f"Updated **{name}** ({fields}).{warn}", ephemeral=True)
+        if "owner" in changes:
+            await prompt_owner_contact_upkeep(
+                interaction, old_owner=old_owner, new_owner=changes["owner"]
+            )
 
 
 @game.command(name="remove", description="Delete a game from the inventory")
@@ -843,21 +990,23 @@ async def game_edit(
 async def game_remove(interaction: discord.Interaction, game: int):
     await interaction.response.defer(ephemeral=True)
 
-    def mutate() -> str | None:
+    def mutate() -> tuple[str, str | None] | None:
         with SessionLocal() as db:
             g = db.get(BoardGame, game)
             if not g:
                 return None
-            title = g.title
+            title, owner = g.title, g.owner
             db.delete(g)
             db.commit()
-            return title
+            return title, owner
 
-    name = await _in_thread(mutate)
-    if name is None:
+    deleted = await _in_thread(mutate)
+    if deleted is None:
         await interaction.followup.send("No game with that id.", ephemeral=True)
     else:
+        name, owner = deleted
         await interaction.followup.send(f"Deleted **{name}**.", ephemeral=True)
+        await prompt_owner_contact_upkeep(interaction, old_owner=owner)
 
 
 # --- stocktake (exec only) -----------------------------------------------------

@@ -71,6 +71,11 @@ class BoardGame(Base):
 class Owner(Base):
     """Contact details for a game owner (a member, or the club itself).
 
+    Owners are donors/lenders: the record exists so the club can reach them
+    when they may want a game back. The bot keeps this table in sync with the
+    inventory via prompts (add a contact for a first-time owner, drop it when
+    their last game leaves; see prompt_owner_contact_upkeep in the bot).
+
     Deliberately a separate table from board_games: the public API serves game
     records to the web page, and contact details must never ride along. This
     table has NO API endpoint; it is read and written only by the exec-gated

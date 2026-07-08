@@ -422,15 +422,23 @@ class _FakeInteraction:
     """Just enough of discord.Interaction for the command callbacks."""
 
     class _Response:
+        def __init__(self) -> None:
+            self.edited: list[dict] = []
+
         async def defer(self, ephemeral: bool = False) -> None:
             pass
+
+        async def edit_message(self, **kwargs) -> None:
+            self.edited.append(kwargs)
 
     class _Followup:
         def __init__(self) -> None:
             self.messages: list[str] = []
+            self.views: list = []
 
-        async def send(self, content=None, **kwargs) -> None:
+        async def send(self, content=None, view=None, **kwargs) -> None:
             self.messages.append(content)
+            self.views.append(view)
 
     def __init__(self) -> None:
         self.response = self._Response()
@@ -469,6 +477,78 @@ def test_edit_with_new_link_refreshes_stale_bgg_fields(monkeypatch):
         assert g.image == "https://cf.geekdo-images.com/catan.jpg"
         assert g.min_players == 3 and g.max_players == 4
         assert g.title == "Catan (RBGA copy)"  # hand-customised title kept
+
+
+# --- donor-contact upkeep prompts -------------------------------------------
+def _insert(title="Catan", owner=None) -> int:
+    with SessionLocal() as db:
+        g = BoardGame(title=title, owner=owner)
+        db.add(g)
+        db.commit()
+        return g.id
+
+
+def test_remove_last_game_offers_contact_cleanup():
+    bot_bg.set_owner_contact("Quan", "quan@rmit.edu.au")
+    gid = _insert(owner="Quan")
+
+    ix = _FakeInteraction()
+    asyncio.run(bot_bg.game_remove.callback(ix, gid))
+
+    assert "Deleted" in ix.followup.messages[0]
+    assert "no longer owns any games" in ix.followup.messages[1]
+    view = ix.followup.views[1]
+    assert isinstance(view, bot_bg.RemoveOwnerContactView)
+
+    # Pressing "Remove contact" actually drops the row.
+    press = _FakeInteraction()
+    asyncio.run(view.remove_btn.callback(press))
+    assert bot_bg.get_owner_contact("Quan") is None
+    assert "Removed the saved contact" in press.response.edited[0]["content"]
+
+
+def test_remove_keeps_contact_when_owner_still_has_games():
+    bot_bg.set_owner_contact("Quan", "quan@rmit.edu.au")
+    _insert(title="Catan", owner="Quan")
+    gid = _insert(title="Azul", owner="Quan")
+
+    ix = _FakeInteraction()
+    asyncio.run(bot_bg.game_remove.callback(ix, gid))
+
+    assert len(ix.followup.messages) == 1  # just "Deleted", no cleanup prompt
+    assert bot_bg.get_owner_contact("Quan") == "quan@rmit.edu.au"
+
+
+def test_add_first_time_owner_prompts_for_contact():
+    ix = _FakeInteraction()
+    asyncio.run(bot_bg.game_add.callback(ix, title="Wingspan", owner="Newbie"))
+
+    assert "Added" in ix.followup.messages[0]
+    assert "new owner with no saved contact" in ix.followup.messages[1]
+    assert isinstance(ix.followup.views[1], bot_bg.AddOwnerContactView)
+
+
+def test_add_for_contactless_bulk_owner_stays_quiet():
+    # RBGA has no contact row but plenty of games; every add must not nag.
+    _insert(title="Catan", owner="RBGA")
+
+    ix = _FakeInteraction()
+    asyncio.run(bot_bg.game_add.callback(ix, title="Azul", owner="RBGA"))
+
+    assert len(ix.followup.messages) == 1
+
+
+def test_edit_reassigning_owner_offers_cleanup_for_old_owner():
+    bot_bg.set_owner_contact("Zac", "zac@example.com")
+    gid = _insert(title="Catan", owner="Zac")
+    _insert(title="Azul", owner="RBGA")
+
+    ix = _FakeInteraction()
+    asyncio.run(bot_bg.game_edit.callback(ix, gid, owner="RBGA"))
+
+    assert "Updated" in ix.followup.messages[0]
+    assert "Zac** no longer owns any games" in ix.followup.messages[1]
+    assert isinstance(ix.followup.views[1], bot_bg.RemoveOwnerContactView)
 
 
 def test_edit_with_bad_link_changes_nothing(monkeypatch):
