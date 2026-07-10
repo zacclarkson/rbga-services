@@ -2,11 +2,25 @@
 # "modular monolith"; see README.md. Follows the ~/servers/<name>/ pattern
 # used on the deploy host (docs/deploy.md): no host port on the DB, a reverse
 # proxy or tunnel fronts the API.
+
+# Every service gets a log cap and a hard memory cap (mem_limit ==
+# memswap_limit, so a runaway container is OOM-killed at its cap and revived
+# by its restart policy instead of dragging the 1 GB prod host into swap —
+# that host froze outright on 2026-07-10). Caps are generous ceilings:
+# steady-state usage is ~30-90 MiB per container.
+x-logging: &log-cap
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
 services:
   db:
     image: postgres:16-alpine
     container_name: rbga-db
     restart: unless-stopped
+    command: postgres -c shared_buffers=64MB -c max_connections=20
+    mem_limit: 300m
+    memswap_limit: 300m
+    logging: *log-cap
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -16,9 +30,16 @@ services:
     # deliberately no host port: only api/bot on this network reach it
 
   api:
+    # Built in CI and pulled on the prod box (which must never build: docker
+    # builds have OOM'd the 1 GB host). `build:` stays for local dev
+    # (`docker compose up --build`). RBGA_IMAGE_TAG pins a rollback.
+    image: ghcr.io/rmit-bga/rbga-services:${RBGA_IMAGE_TAG:-latest}
     build: .
     container_name: rbga-api
     restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
+    logging: *log-cap
     depends_on:
       - db
     environment:
@@ -34,9 +55,13 @@ services:
       - "30010:8000" # cloudflared ingress -> localhost:30010
 
   bot:
+    image: ghcr.io/rmit-bga/rbga-services:${RBGA_IMAGE_TAG:-latest}
     build: .
     container_name: rbga-bot
     restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
+    logging: *log-cap
     depends_on:
       - db
     environment:
@@ -71,6 +96,9 @@ services:
     image: caddy:2
     container_name: rbga-caddy
     restart: unless-stopped
+    mem_limit: 96m
+    memswap_limit: 96m
+    logging: *log-cap
     profiles: ["caddy"]
     depends_on:
       - api
