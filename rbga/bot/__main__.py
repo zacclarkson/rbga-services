@@ -9,6 +9,8 @@ Features:
   * board games: the `/game` group (rbga/bot/boardgames.py)
   * complaints: routing + ticket handling (rbga/bot/complaints.py). Handled via
     the API (reviewer token), never direct DB access; metadata only in Discord.
+  * instagram: mirrors announcements to the club Instagram as stories, behind
+    an exec-confirmed preview (rbga/bot/instagram.py).
 
 Reads are open to everyone; mutations are gated to the exec role named by
 `DISCORD_KEYS_ROLE` (see rbga/bot/common.py). If that var is unset we fail closed
@@ -27,13 +29,19 @@ from sqlalchemy import select
 
 from ..db.database import SessionLocal
 from ..db.models import Key
-from . import boardgames, complaints
+from . import boardgames, complaints, instagram
 from .common import EXEC_ROLE, _in_thread, require_exec_role
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
 GUILD_ID = os.environ.get("DISCORD_GUILD_ID")  # set for instant command sync in one guild
 
 intents = discord.Intents.default()
+# Reading announcement text needs the (privileged) message-content intent, which
+# must ALSO be enabled on the Discord developer portal or login fails. Only ask
+# for it when the Instagram mirror is actually configured, so an unconfigured
+# bot keeps working without the portal toggle.
+if instagram.configured():
+    intents.message_content = True
 
 
 class RBGAClient(discord.Client):
@@ -43,6 +51,7 @@ class RBGAClient(discord.Client):
         # (discord.py drops the clicks with no error), which is exactly a
         # "buttons on old messages die after every restart" bug.
         complaints.register_persistent(self)
+        instagram.register_persistent(self)
 
 
 client = RBGAClient(intents=intents)
@@ -234,7 +243,15 @@ async def on_ready():
     else:
         await tree.sync()
     complaints.start_polling(client)  # begin routing new complaints to Discord
+    instagram.start_refresh(client)  # keep the Instagram token alive
     print(f"Logged in as {client.user}")
+
+
+@client.event
+async def on_message(message: discord.Message):
+    # A plain discord.Client dispatches ONE on_message handler; keep it here in
+    # the entry point and fan out to feature modules that want messages.
+    await instagram.on_announcement(message)
 
 
 def main():
@@ -242,6 +259,7 @@ def main():
         raise SystemExit("DISCORD_TOKEN is not set; see .env.example")
     if not EXEC_ROLE:
         print("Warning: DISCORD_KEYS_ROLE is not set, so all mutations will be denied.")
+    instagram.log_status()
     client.run(TOKEN)
 
 

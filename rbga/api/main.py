@@ -13,7 +13,7 @@ from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import boardgames, complaints, keys
+from .routers import boardgames, complaints, igmedia, keys
 
 # alembic.ini lives at the repo/image root (two levels up from this file).
 _ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
@@ -45,6 +45,7 @@ if _cors_origins:
 app.include_router(keys.router)
 app.include_router(boardgames.router)
 app.include_router(complaints.router)
+app.include_router(igmedia.router)
 
 
 @app.get("/health")

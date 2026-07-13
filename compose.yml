@@ -72,6 +72,14 @@ services:
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
       DISCORD_KEYS_ROLE: ${DISCORD_KEYS_ROLE:-}
       BGG_API_TOKEN: ${BGG_API_TOKEN:-}
+      # Instagram announcement mirror (all optional; see docs/instagram-setup.md).
+      # The bot uploads rendered story frames to the API's /ig-media (write
+      # token) and Instagram fetches them from the public base URL.
+      IG_ANNOUNCE_CHANNEL_ID: ${IG_ANNOUNCE_CHANNEL_ID:-}
+      IG_USER_ID: ${IG_USER_ID:-}
+      IG_ACCESS_TOKEN: ${IG_ACCESS_TOKEN:-}
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-}
+      RBGA_API_TOKEN: ${RBGA_API_TOKEN:-}
       # Complaints handling: the bot reaches complaints via the API (reviewer
       # token), never the DB, so its restricted DB role is unchanged.
       RBGA_API_BASE_URL: ${RBGA_API_BASE_URL:-http://api:8000}

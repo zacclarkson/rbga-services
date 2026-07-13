@@ -133,6 +133,29 @@ class Complaint(Base):
     routed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class InstagramConfig(Base):
+    """Single-row (id=1) storage for the Instagram Graph API access token.
+
+    The token has to live in the DB, not .env: long-lived tokens expire every
+    60 days and the bot refreshes them in place (a container can't rewrite its
+    own env). Seeded from IG_ACCESS_TOKEN on first use. Default public schema
+    on purpose — the bot reads/writes it directly with its rbga_bot role
+    (granted automatically via migration 0011's default privileges)."""
+
+    __tablename__ = "instagram_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
+    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When the token was last exchanged/refreshed; the refresh loop uses this
+    # to decide when a refresh is due (and it's the age Instagram counts the
+    # 60-day expiry from).
+    token_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # The IG_ACCESS_TOKEN value that was last absorbed from the env. When the
+    # env var changes (an exec pasted a replacement for a dead token), the new
+    # value re-seeds access_token instead of being shadowed by the stale row.
+    env_seed: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ComplaintsConfig(Base):
     """Single-row (id=1) runtime config for where complaints are routed in
     Discord, set by the /complaints-setup wizard. Not sensitive (just channel/user
