@@ -1,6 +1,7 @@
 """Board-game tags: storage round-trip, tag filter, BGG category parsing,
 the BGG enrichment pass, and the /game gallery rendering."""
 import asyncio
+from typing import get_args
 
 import pytest
 from sqlalchemy import func, select
@@ -691,3 +692,56 @@ def test_bulk_edit_reports_no_match():
     )
     assert "No games match that." in ix.followup.messages[0]
     assert ix.followup.views[0] is None
+
+
+# --- stocktake: per-campus filter + set condition on Seen -------------------
+def _insert_cond(title: str, condition: str | None) -> int:
+    with SessionLocal() as db:
+        g = BoardGame(title=title, condition=condition)
+        db.add(g)
+        db.commit()
+        return g.id
+
+
+def test_stocktake_location_filter_scopes_to_campus():
+    city1 = _insert_loc("Catan", "City")
+    city2 = _insert_loc("Azul", "City")
+    _insert_loc("Wingspan", "Bundoora")
+    _insert_loc("Uno", None)  # un-located: excluded from a campus walk
+
+    ix = _FakeInteraction()
+    asyncio.run(bot_bg.game_stocktake.callback(ix, location="city"))  # case-insensitive
+    view = ix.followup.views[0]
+    assert isinstance(view, bot_bg.StocktakeView)
+    assert sorted(view.game_ids) == sorted([city1, city2])
+
+
+def test_stocktake_condition_dropdown_sets_condition_and_marks_seen():
+    gid = _insert_cond("Catan", "Like New")  # imported optimistically
+    view = bot_bg.StocktakeView([gid])
+    # the dropdown offers exactly the four Condition values
+    assert [o.value for o in view.condition_select.options] == list(get_args(bot_bg.Condition))
+
+    press = _FakeInteraction()
+    asyncio.run(view._mark(press, missing=False, condition="Damaged"))
+
+    with SessionLocal() as db:
+        g = db.get(BoardGame, gid)
+        assert g.condition == "Damaged"  # corrected
+        assert g.missing is False
+        assert g.last_seen_at is not None  # counts as seen
+    assert view.recondition == 1
+    assert view.seen == 1
+
+
+def test_stocktake_seen_button_leaves_condition_untouched():
+    gid = _insert_cond("Azul", "Like New")
+    view = bot_bg.StocktakeView([gid])
+
+    press = _FakeInteraction()
+    asyncio.run(view._mark(press, missing=False))  # plain Seen ✔, no condition
+
+    with SessionLocal() as db:
+        assert db.get(BoardGame, gid).condition == "Like New"
+    assert view.recondition == 0
+    assert view.seen == 1

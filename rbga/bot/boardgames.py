@@ -11,7 +11,7 @@ numeric id, disambiguated for the user by autocomplete that shows "#id Title".
 import csv
 import io
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 import discord
 from discord import app_commands
@@ -1221,6 +1221,7 @@ class StocktakeView(discord.ui.View):
         self.seen = 0
         self.missing = 0
         self.skipped = 0
+        self.recondition = 0
         self.message: discord.Message | None = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1234,8 +1235,9 @@ class StocktakeView(discord.ui.View):
     def _summary(self) -> str:
         return (
             f"**Stocktake done:** {self.seen} seen, {self.missing} missing, "
-            f"{self.skipped} skipped. Missing games show ⚠ in /game list; "
-            "get the full picture with /game export."
+            f"{self.skipped} skipped, {self.recondition} condition(s) updated. "
+            "Missing games show ⚠ in /game list; get the full picture with "
+            "/game export."
         )
 
     async def render_kwargs(self) -> dict:
@@ -1247,7 +1249,12 @@ class StocktakeView(discord.ui.View):
         header = f"**Stocktake {self.idx + 1}/{len(self.game_ids)}**: is this on the shelf?"
         return {"content": header, "embed": game_card(g) if g else None, "view": self}
 
-    async def _mark(self, interaction: discord.Interaction, missing: bool | None) -> None:
+    async def _mark(
+        self,
+        interaction: discord.Interaction,
+        missing: bool | None,
+        condition: str | None = None,
+    ) -> None:
         gid = self.game_ids[self.idx]
         if missing is None:
             self.skipped += 1
@@ -1259,6 +1266,8 @@ class StocktakeView(discord.ui.View):
                         g.missing = missing
                         if not missing:
                             g.last_seen_at = datetime.utcnow()
+                        if condition is not None:
+                            g.condition = condition
                         db.commit()
 
             await _in_thread(mutate)
@@ -1266,21 +1275,36 @@ class StocktakeView(discord.ui.View):
                 self.missing += 1
             else:
                 self.seen += 1
+            if condition is not None:
+                self.recondition += 1
         self.idx += 1
         kwargs = await self.render_kwargs()
         if self.idx >= len(self.game_ids):
             self.stop()
         await interaction.response.edit_message(**kwargs)
 
-    @discord.ui.button(label="Seen ✔", style=discord.ButtonStyle.success)
+    # A condition pick means "I've found it and looked at it", so it counts as
+    # Seen and also corrects the recorded condition (many games are stuck on the
+    # imported "Like New"). Sits above the buttons.
+    @discord.ui.select(
+        placeholder="Mark seen & set condition…",
+        options=[discord.SelectOption(label=c) for c in get_args(Condition)],
+        row=0,
+    )
+    async def condition_select(
+        self, interaction: discord.Interaction, select: discord.ui.Select
+    ) -> None:
+        await self._mark(interaction, missing=False, condition=select.values[0])
+
+    @discord.ui.button(label="Seen ✔", style=discord.ButtonStyle.success, row=1)
     async def seen_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._mark(interaction, missing=False)
 
-    @discord.ui.button(label="Missing ✖", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Missing ✖", style=discord.ButtonStyle.danger, row=1)
     async def missing_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._mark(interaction, missing=True)
 
-    @discord.ui.button(label="Skip ▶", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Skip ▶", style=discord.ButtonStyle.secondary, row=1)
     async def skip_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._mark(interaction, missing=None)
 
@@ -1305,13 +1329,15 @@ def _get_game(gid: int) -> BoardGame | None:
 @game.command(name="stocktake", description="Walk the shelf: mark each game seen or missing")
 @app_commands.describe(
     owner="Only stocktake games owned by this person/RBGA",
+    location="Only stocktake games stored at this location",
     unseen_only="Only games not yet sighted today (resume a stocktake)",
 )
-@app_commands.autocomplete(owner=owner_autocomplete)
+@app_commands.autocomplete(owner=owner_autocomplete, location=location_autocomplete)
 @app_commands.check(require_exec_role)
 async def game_stocktake(
     interaction: discord.Interaction,
     owner: str | None = None,
+    location: str | None = None,
     unseen_only: bool = True,
 ):
     await interaction.response.defer()
@@ -1321,6 +1347,8 @@ async def game_stocktake(
             stmt = select(BoardGame.id)
             if owner:
                 stmt = stmt.where(BoardGame.owner == owner)
+            if location:
+                stmt = stmt.where(func.lower(BoardGame.location) == location.lower())
             if unseen_only:
                 today = datetime.utcnow().date()
                 stmt = stmt.where(
